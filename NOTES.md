@@ -161,3 +161,10 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
 - Loader: INITRD 0x4558B000..0x456FE487 found, 'no SWEETXNU payload'. NEXT: build willow XNU kernel (ios-sweet patches + xnu/patches 0951-0955), run tools/mkpayload.py KERNEL dtb/willow/willow.adt OUT, put payload in the ramdisk of the EvolutionX-layout boot image (extend tools/pack_evox_boot.py to append it to the ramdisk).
 
 - (2026-10-24) Workspace is now a git repo (portable MinGit at C:\Users\Teresa\tools\mingit\cmd, add to PATH) pushed to private https://github.com/FoxxoOwO/willowios (scratch/, firmware/, EvolutionX zip, graphify-out ignored). XNU cannot be built on Windows -> CI. xnu.yml run 40125739744 started 19:32Z (push to main). Fetch: gh run download 40125739744 -R FoxxoOwO/willowios -n xnu-kernel -D xnu/out ; then tools/mkpayload.py + extend pack_evox_boot.py to append payload to ramdisk.
+
+## Milestone (2026-10-24, verified): XNU kernel artifact downloaded and packed into boot image
+- CI run 40125739744 built XNU kernel successfully (18 MB Mach-O, xnu/out/kernel.development.sweet).
+- tools/mkpayload.py resolved fixups and packed kernel + willow.adt into xnu/out/payload.bin (17,437,712 bytes, magic SWEETXNU).
+- Extended tools/pack_evox_boot.py to take --payload <path> as ramdisk.
+- Packed shim/out/shim-evox-boot.img (17,739,776 bytes) containing full willow XNU kernel payload.
+- Ready for device boot test!
