@@ -176,3 +176,6 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
 - Reached BSD init waiting for root device.
 - Rebuilt payload with rd=ufsroot0 to trigger willow SDHCI eMMC 5.1 (0x04744000) driver and GPT userdata partition scanner.
 - Packed shim/out/shim-evox-boot.img ready for test.
+
+- Rebuilt payload with startup_debug=1 -v rd=ufsroot0 to make XNU verbose on kernel_bootstrap_thread execution.
+- Ready for device boot test!
