@@ -1,0 +1,372 @@
+Subject: [PATCH 952/954] willow: sdhci@4744000 eMMC 5.1 root block device & 512B GPT support
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -109,6 +109,8 @@
+ 	bool writable;                          /* boot-arg ufsrw=1 */
+ 	bool cache;                             /* boot-arg ufscache=1 */
+ 	bool wait;                              /* boot-arg ufswait=1 */
++	bool sdhci;                             /* willow: sdhci@4744000 eMMC (512B sectors) */
++	uint32_t reg_size;
+ 	int bmajor, cmajor;
+ 	dev_t bdev;
+ 	bool ready;
+@@ -256,12 +258,150 @@
+ 	return 0;
+ }
+ 
++/*
++ * willow (SM6125 "trinket"): internal storage is eMMC 5.1 on sdhci@4744000
++ * (hc_mem @ +0x0000, cmdq_mem @ +0x1000). Polled PIO transfers over 512-byte
++ * hardware sectors, translating each 4 KiB UFS_BLOCK into 8 x 512B sectors.
++ */
++#define SDHCI_BLOCK_SIZE        0x04u
++#define SDHCI_ARGUMENT          0x08u
++#define SDHCI_TRANSFER_MODE     0x0cu
++#define SDHCI_BUFFER            0x20u
++#define SDHCI_PRESENT_STATE     0x24u
++#define SDHCI_HOST_CONTROL      0x28u
++#define SDHCI_CLOCK_CONTROL     0x2cu
++#define SDHCI_SOFTWARE_RESET    0x2fu
++#define SDHCI_INT_STATUS        0x30u
++#define SDHCI_INT_ENABLE        0x34u
++#define SDHCI_SIGNAL_ENABLE     0x38u
++#define SDHCI_HOST_CONTROL2     0x3eu
++
++#define SDHCI_CMD_INHIBIT       0x00000001u
++#define SDHCI_DATA_INHIBIT      0x00000002u
++#define SDHCI_SPACE_AVAILABLE   0x00000400u
++#define SDHCI_DATA_AVAILABLE    0x00000800u
++#define SDHCI_TRNS_BLK_CNT_EN   0x0002u
++#define SDHCI_TRNS_AUTO_CMD12   0x0004u
++#define SDHCI_TRNS_READ         0x0010u
++#define SDHCI_TRNS_MULTI        0x0020u
++#define SDHCI_INT_RESPONSE      0x00000001u
++#define SDHCI_INT_DATA_END      0x00000002u
++#define SDHCI_INT_SPACE_AVAIL   0x00000010u
++#define SDHCI_INT_DATA_AVAIL    0x00000020u
++#define SDHCI_INT_ERROR         0x00008000u
++
++static void
++sdhci_reset_lines(uint8_t mask)
++{
++	*(volatile uint8_t *)(su.regs + SDHCI_SOFTWARE_RESET) = mask;
++	for (unsigned i = 0; i < 10000; i++) {
++		if (!(ufs_rd(SDHCI_CLOCK_CONTROL) & ((uint32_t)mask << 24))) {
++			break;
++		}
++		delay(1);
++	}
++}
++
++static int
++sdhci_rw_sectors(uint32_t sector, uint32_t cnt, void *buf, bool write)
++{
++	uint32_t *p = (uint32_t *)buf;
++
++	while (cnt > 0) {
++		uint32_t chunk = MIN(cnt, 4096u);
++		unsigned wait_us = 0;
++		while (ufs_rd(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) {
++			if (++wait_us > 5000000u) {
++				sdhci_reset_lines(0x06);
++				return ETIMEDOUT;
++			}
++			delay(1);
++		}
++		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
++		ufs_wr(SDHCI_BLOCK_SIZE, 512u | ((chunk & 0xffffu) << 16));
++		ufs_wr(SDHCI_ARGUMENT, sector);
++
++		uint16_t mode = SDHCI_TRNS_BLK_CNT_EN | (write ? 0u : SDHCI_TRNS_READ);
++		uint16_t cmd_idx = write ? 24u : 17u;
++		if (chunk > 1) {
++			mode |= SDHCI_TRNS_MULTI | SDHCI_TRNS_AUTO_CMD12;
++			cmd_idx = write ? 25u : 18u;
++		}
++		uint16_t cmd = (uint16_t)((cmd_idx << 8) | 0x3au);
++		ufs_wr(SDHCI_TRANSFER_MODE, (uint32_t)mode | ((uint32_t)cmd << 16));
++
++		wait_us = 0;
++		while (!(ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_RESPONSE)) {
++			if (ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_ERROR) {
++				sdhci_reset_lines(0x06);
++				return EIO;
++			}
++			if (++wait_us > 5000000u) {
++				sdhci_reset_lines(0x06);
++				return ETIMEDOUT;
++			}
++			delay(1);
++		}
++		ufs_wr(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
++
++		uint32_t pmask = write ? SDHCI_SPACE_AVAILABLE : SDHCI_DATA_AVAILABLE;
++		uint32_t imask = write ? SDHCI_INT_SPACE_AVAIL : SDHCI_INT_DATA_AVAIL;
++		for (uint32_t s = 0; s < chunk; s++) {
++			wait_us = 0;
++			while (!(ufs_rd(SDHCI_PRESENT_STATE) & pmask) &&
++			       !(ufs_rd(SDHCI_INT_STATUS) & imask)) {
++				if (ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_ERROR) {
++					sdhci_reset_lines(0x06);
++					return EIO;
++				}
++				if (++wait_us > 5000000u) {
++					sdhci_reset_lines(0x06);
++					return ETIMEDOUT;
++				}
++				delay(1);
++			}
++			ufs_wr(SDHCI_INT_STATUS, imask);
++			if (write) {
++				for (unsigned w = 0; w < 512u / 4u; w++) {
++					ufs_wr(SDHCI_BUFFER, *p++);
++				}
++			} else {
++				for (unsigned w = 0; w < 512u / 4u; w++) {
++					*p++ = ufs_rd(SDHCI_BUFFER);
++				}
++			}
++		}
++
++		wait_us = 0;
++		while (!(ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_DATA_END)) {
++			if (ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_ERROR) {
++				sdhci_reset_lines(0x06);
++				return EIO;
++			}
++			if (++wait_us > 5000000u) {
++				break;
++			}
++			delay(1);
++		}
++		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
++		sector += chunk;
++		cnt -= chunk;
++	}
++	return 0;
++}
++
+ /* READ(10) of count device blocks at lba into the bounce buffer. */
+ static int
+ ufs_read_blocks(uint64_t lba, uint32_t count)
+ {
+ 	if (lba > UINT32_MAX || count > BOUNCE_SIZE / UFS_BLOCK) {
+ 		return EINVAL;
++	}
++	if (su.sdhci) {
++		if ((lba << 3) > UINT32_MAX) {
++			return EINVAL;
++		}
++		return sdhci_rw_sectors((uint32_t)(lba << 3), count << 3, (void *)(su.dma + DMA_BOUNCE), false);
+ 	}
+ 	uint8_t cdb[10] = {
+ 		0x28, 0,
+@@ -294,6 +434,12 @@
+ 		printf("SWEET UFS: refusing write of %u blocks at 0x%llx\n", count, lba);
+ 		return EPERM;
+ 	}
++	if (su.sdhci) {
++		if ((lba << 3) > UINT32_MAX) {
++			return EINVAL;
++		}
++		return sdhci_rw_sectors((uint32_t)(lba << 3), count << 3, (void *)(su.dma + DMA_BOUNCE), true);
++	}
+ 	uint8_t cdb[10] = {
+ 		0x2a, 0,
+ 		(uint8_t)(lba >> 24), (uint8_t)(lba >> 16), (uint8_t)(lba >> 8), (uint8_t)lba,
+@@ -305,6 +451,9 @@
+ static int
+ ufs_sync_cache(void)
+ {
++	if (su.sdhci) {
++		return 0;
++	}
+ 	static const uint8_t cdb[10] = { 0x35 };       /* SYNCHRONIZE CACHE(10), whole LUN */
+ 	return ufs_scsi(cdb, sizeof(cdb), 0, false);
+ }
+@@ -313,32 +462,42 @@
+ ufs_find_partition(const char *want)
+ {
+ 	const uint8_t *b = (const uint8_t *)(su.dma + DMA_BOUNCE);
+-	int error = ufs_read_blocks(1, 1);
++	int error = ufs_read_blocks(su.sdhci ? 0 : 1, 1);
+ 	if (error) {
+ 		return error;
+ 	}
+-	if (memcmp(b, "EFI PART", 8) != 0) {
++	const uint8_t *gh = su.sdhci ? (b + 512) : b;
++	if (memcmp(gh, "EFI PART", 8) != 0) {
+ 		printf("SWEET UFS: LUN %u has no GPT\n", su.lun);
+ 		return ENXIO;
+ 	}
+ 	uint64_t entry_lba;
+ 	uint32_t nent, esz;
+-	memcpy(&gpt_hcrc, b + 16, 4);
+-	memcpy(&gpt_alt, b + 32, 8);
+-	memcpy(&gpt_ecrc, b + 88, 4);
+-	memcpy(&entry_lba, b + 72, 8);
+-	memcpy(&nent, b + 80, 4);
+-	memcpy(&esz, b + 84, 4);
+-	if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE) {
++	memcpy(&gpt_hcrc, gh + 16, 4);
++	memcpy(&gpt_alt, gh + 32, 8);
++	memcpy(&gpt_ecrc, gh + 88, 4);
++	memcpy(&entry_lba, gh + 72, 8);
++	memcpy(&nent, gh + 80, 4);
++	memcpy(&esz, gh + 84, 4);
++	if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE / 2) {
+ 		printf("SWEET UFS: unsupported GPT entries %u x %u\n", nent, esz);
+ 		return ENXIO;
+ 	}
+-	error = ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++	const uint8_t *ents = b;
++	if (su.sdhci) {
++		uint64_t byte_off = entry_lba * 512ull;
++		uint64_t blk0 = byte_off / UFS_BLOCK;
++		uint32_t nblk = (uint32_t)((byte_off % UFS_BLOCK + (uint64_t)nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++		error = ufs_read_blocks(blk0, nblk);
++		ents = b + (byte_off % UFS_BLOCK);
++	} else {
++		error = ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++	}
+ 	if (error) {
+ 		return error;
+ 	}
+ 	for (uint32_t i = 0; i < nent; i++) {
+-		const uint8_t *e = b + i * esz;
++		const uint8_t *e = ents + i * esz;
+ 		char name[37];
+ 		unsigned c;
+ 		for (c = 0; c < 36; c++) {
+@@ -358,9 +517,14 @@
+ 		if (last < first) {
+ 			return ENXIO;
+ 		}
++		if (su.sdhci) {
++			first >>= 3;
++			last = ((last + 1) >> 3) - 1;
++			gpt_alt >>= 3;
++		}
+ 		su.first_block = first;
+ 		su.nblocks = last - first + 1;
+-		if (ufs_read_blocks(gpt_alt, 1) == 0 && memcmp(b, "EFI PART", 8) == 0) {
++		if (!su.sdhci && ufs_read_blocks(gpt_alt, 1) == 0 && memcmp(b, "EFI PART", 8) == 0) {
+ 			memcpy(&gpt_bhcrc, b + 16, 4);
+ 		}
+ 		printf("SWEET UFS: GPT LUN0 hcrc %#x ecrc %#x backup@%#llx hcrc %#x\n",
+@@ -392,22 +556,37 @@
+ 	if (part_cached == sizeof(part_cache) / sizeof(part_cache[0]) || strlen(want) > 36) {
+ 		return ENOSPC;
+ 	}
+-	for (uint8_t lun = 0; lun < 6; lun++) {
++	for (uint8_t lun = 0; lun < (su.sdhci ? 1 : 6); lun++) {
+ 		su.lun = lun;
+-		if (ufs_read_blocks(1, 1) != 0 || memcmp(b, "EFI PART", 8) != 0) {
++		if (ufs_read_blocks(su.sdhci ? 0 : 1, 1) != 0) {
++			continue;
++		}
++		const uint8_t *gh = su.sdhci ? (b + 512) : b;
++		if (memcmp(gh, "EFI PART", 8) != 0) {
+ 			continue;
+ 		}
+ 		uint64_t entry_lba;
+ 		uint32_t nent, esz;
+-		memcpy(&entry_lba, b + 72, 8);
+-		memcpy(&nent, b + 80, 4);
+-		memcpy(&esz, b + 84, 4);
+-		if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE ||
+-		    ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK) != 0) {
++		memcpy(&entry_lba, gh + 72, 8);
++		memcpy(&nent, gh + 80, 4);
++		memcpy(&esz, gh + 84, 4);
++		if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE / 2) {
+ 			continue;
+ 		}
++		const uint8_t *ents = b;
++		if (su.sdhci) {
++			uint64_t byte_off = entry_lba * 512ull;
++			uint64_t blk0 = byte_off / UFS_BLOCK;
++			uint32_t nblk = (uint32_t)((byte_off % UFS_BLOCK + (uint64_t)nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++			if (ufs_read_blocks(blk0, nblk) != 0) {
++				continue;
++			}
++			ents = b + (byte_off % UFS_BLOCK);
++		} else if (ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK) != 0) {
++			continue;
++		}
+ 		for (uint32_t i = 0; i < nent; i++) {
+-			const uint8_t *e = b + i * esz;
++			const uint8_t *e = ents + i * esz;
+ 			char name[37];
+ 			unsigned c;
+ 			for (c = 0; c < 36; c++) {
+@@ -423,6 +602,10 @@
+ 			memcpy(&last, e + 40, 8);
+ 			if (strcmp(name, want) != 0 || last < first) {
+ 				continue;
++			}
++			if (su.sdhci) {
++				first >>= 3;
++				last = ((last + 1) >> 3) - 1;
+ 			}
+ 			unsigned k = part_cached++;
+ 			strlcpy(part_cache[k].name, want, sizeof(part_cache[k].name));
+@@ -475,6 +658,23 @@
+ static int
+ ufs_take_over_host(void)
+ {
++	if (su.sdhci) {
++		if (su.reg_size >= 0x2000u) {
++			uint32_t cqcfg = *(volatile uint32_t *)(su.regs + 0x1008u);
++			if (cqcfg & 1u) {
++				*(volatile uint32_t *)(su.regs + 0x1008u) = cqcfg & ~1u;
++			}
++		}
++		ufs_wr(SDHCI_SIGNAL_ENABLE, 0);
++		ufs_wr(SDHCI_INT_ENABLE, 0x03ff00fbu);
++		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
++		uint8_t hctrl = *(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL);
++		*(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL) = hctrl & ~0x18u;
++		uint16_t hc2 = *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2);
++		*(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2) = hc2 & ~(1u << 12);
++		printf("SWEET UFS: willow SDHCI eMMC host ready (pstate=%#x)\n", ufs_rd(SDHCI_PRESENT_STATE));
++		return 0;
++	}
+ 	uint32_t hce = ufs_rd(REG_HCE), hcs = ufs_rd(REG_HCS);
+ 	if (!(hce & 1) || !(hcs & HCS_DP) || !(hcs & HCS_UTRLRDY)) {
+ 		printf("SWEET UFS: host not ready (hce 0x%x hcs 0x%x)\n", hce, hcs);
+@@ -716,10 +916,11 @@
+ 		uint32_t h = 0, e = 0, bh = 0;
+ 		bool ok;
+ 		lck_mtx_lock(&sweet_ufs_lock);
+-		ok = ufs_read_blocks(1, 1) == 0 && memcmp(b, "EFI PART", 8) == 0;
++		const uint8_t *gh = su.sdhci ? (b + 512) : b;
++		ok = ufs_read_blocks(su.sdhci ? 0 : 1, 1) == 0 && memcmp(gh, "EFI PART", 8) == 0;
+ 		if (ok) {
+-			memcpy(&h, b + 16, 4);
+-			memcpy(&e, b + 88, 4);
++			memcpy(&h, gh + 16, 4);
++			memcpy(&e, gh + 88, 4);
+ 		}
+ 		if (ok && gpt_bhcrc && ufs_read_blocks(gpt_alt, 1) == 0) {
+ 			if (memcmp(b, "EFI PART", 8) == 0) {
+@@ -760,6 +961,8 @@
+ 	su.cache = (cache == 1);
+ 	su.wait = (wait == 1);
+ 
++	su.sdhci = (reg[0] == 0x04744000u);
++	su.reg_size = (uint32_t)reg[1];
+ 	su.regs = ml_io_map(reg[0], reg[1]);
+ 	if (kmem_alloc_contig(kernel_map, &su.dma, DMA_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+@@ -776,7 +979,7 @@
+ 
+ 	lck_mtx_lock(&sweet_ufs_lock);
+ 	error = ufs_take_over_host();
+-	if (!error) {
++	if (!error && !su.sdhci) {
+ 		static const uint8_t tur[6] = { 0x00 };
+ 		/* The first command after the bootloader may report a unit attention. */
+ 		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {

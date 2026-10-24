@@ -1,0 +1,94 @@
+Subject: [PATCH 954/954] willow: PMI632 (SPMI USID 2) QG fuel gauge and SMB5 charger support
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -14,9 +14,10 @@
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ 
+-#define SP_CORE_PA 0x0c440000u
+-#define SP_OBS_PA  0x0e600000u
+-#define SP_CFG_PA  0x0c40a000u
++/* willow/trinket SPMI v5 arbiter @ 0x01c40000 (PMI632 fuel gauge & SMB5 charger on USID 2) */
++#define SP_CORE_PA 0x01c40000u
++#define SP_OBS_PA  0x03e00000u
++#define SP_CFG_PA  0x01c0a000u
+ #define SP_NO_APID 0xffffu
+ 
+ static vm_offset_t sp_core, sp_obs, sp_cfg;
+@@ -88,7 +89,7 @@
+ {
+ 	/* Restrict access to the battery blocks; keys retain their own lanes. */
+ 	unsigned peripheral = addr >> 8;
+-	if (!sp_ready || !out || sid != 0 || addr > 0xffffu ||
++	if (!sp_ready || !out || (sid != 0 && sid != 2) || addr > 0xffffu ||
+ 	    (peripheral != 0x10 && peripheral != 0x11 && peripheral != 0x12 &&
+ 	    peripheral != 0x13 && peripheral != 0x48)) {
+ 		return -1;
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -175,8 +175,8 @@
+ 	uint16_t previous = 0;
+ 	for (unsigned attempt = 0; attempt < 4; ++attempt) {
+ 		uint8_t lo, hi;
+-		if (sweet_spmi_read(0, address, &lo) ||
+-		    sweet_spmi_read(0, address + 1, &hi)) {
++		if ((sweet_spmi_read(2, address, &lo) && sweet_spmi_read(0, address, &lo)) ||
++		    (sweet_spmi_read(2, address + 1, &hi) && sweet_spmi_read(0, address + 1, &hi))) {
+ 			return false;
+ 		}
+ 		uint16_t next = (uint16_t)((unsigned)lo | ((unsigned)hi << 8));
+@@ -375,21 +375,22 @@
+ 	if (fReal && pollTopaz()) {
+ 		return;
+ 	}
+-	if (fReal) {
+-		publish(100, 4200, 0, true, true, false, true, false, false);
+-		return;
+-	}
++	/* willow: PMI632 (SPMI USID 2) qpnp,qg @ 0x4800 + qpnp-smb5 @ 0x1000..0x1300 */
++	unsigned sid = 2;
+ 	uint8_t type, present, usb, path, charger, error, temperature;
++	if (fReal && sweet_spmi_read(sid, 0x4804, &type)) {
++		sid = 0;
++	}
+ 	uint16_t rawVoltage;
+ 	bool valid = fReal &&
+-	    !sweet_spmi_read(0, 0x4804, &type) && type == 0x0d &&
+-	    !sweet_spmi_read(0, 0x4808, &present) && (present & 1u) &&
++	    !sweet_spmi_read(sid, 0x4804, &type) && type == 0x0d &&
++	    !sweet_spmi_read(sid, 0x4808, &present) && (present & 1u) &&
+ 	    readWord(0x48c0, &rawVoltage) && rawVoltage != 0x8000 &&
+-	    !sweet_spmi_read(0, 0x1310, &usb) &&
+-	    !sweet_spmi_read(0, 0x110b, &path) &&
+-	    !sweet_spmi_read(0, 0x1006, &charger) &&
+-	    !sweet_spmi_read(0, 0x1007, &error) &&
+-	    !sweet_spmi_read(0, 0x100d, &temperature);
++	    !sweet_spmi_read(sid, 0x1310, &usb) &&
++	    !sweet_spmi_read(sid, 0x110b, &path) &&
++	    !sweet_spmi_read(sid, 0x1006, &charger) &&
++	    !sweet_spmi_read(sid, 0x1007, &error) &&
++	    !sweet_spmi_read(sid, 0x100d, &temperature);
+ 	unsigned mv = valid ? (unsigned)(((uint64_t)rawVoltage * 194637u) / 1000000u) : 0;
+ 	/* Zero, reset, floating, or implausible data cannot become 0% battery. */
+ 	valid = valid && mv >= 2800 && mv <= 4600;
+@@ -407,7 +408,7 @@
+ 	int ma = 0;
+ 	uint8_t subtype;
+ 	uint16_t rawCurrent;
+-	bool currentValid = !sweet_spmi_read(0, 0x4805, &subtype) &&
++	bool currentValid = !sweet_spmi_read(sid, 0x4805, &subtype) &&
+ 	    (subtype == 3 || subtype == 4) && readWord(0x48c2, &rawCurrent) &&
+ 	    rawCurrent != 0x8000;
+ 	if (currentValid) {
+@@ -438,7 +439,7 @@
+ 	(void)sweet_cpufreq_max();
+ 	int real = 1;   /* topaz: real gauge by default; sweetbattery=0 for the static fallback */
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+-	fReal = real == 1 && sweet_i2c1_init() == 0;
++	fReal = real == 1 && (sweet_spmi_init() == 0 || sweet_i2c1_init() == 0);
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+ 	if (fReal) {

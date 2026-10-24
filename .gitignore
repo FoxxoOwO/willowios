@@ -1,0 +1,21 @@
+# device dumps: persist/modemst/fsg hold IMEI + calibration; live DT holds the serial
+backup/
+dtb/*
+!dtb/willow/
+recovery/
+# stock fastboot ROM archives
+*.tgz
+*.tar
+# third-party/Apple sources fetched for reading
+research/
+shim/out/
+enxerto/out/
+xnu/out/
+xnu/out-*/
+__pycache__/
+
+# local-only: stock/custom ROM images, scratch analysis, ABL dumps, graph cache
+scratch/
+EvolutionX*.zip
+firmware/
+graphify-out/

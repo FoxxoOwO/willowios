@@ -1,0 +1,110 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1022,15 +1022,9 @@ sweet_ufs_init(void)
+ 	 * topaz; sweettouch=0 / sweetkeys=0 disable them. USB still pokes SM7150
+ 	 * MMIO (DWC3 at 0xa600000), so it only runs with sweethw=1.
+ 	 */
+-	int hw = 0;
+-	(void)PE_parse_boot_argn("sweethw", &hw, sizeof(hw));
+ 	sweet_touch_init();
+ 	sweet_keys_init();
+-	if (hw == 1) {
+-		sweet_usb_probe();
+-	} else {
+-		printf("SWEET UFS: USB skipped (topaz, sweethw=0)\n");
+-	}
++	sweet_usb_probe();
+ 	return 0;
+ }
+ 
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -39,25 +39,28 @@
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ 
+-#define GCC_PA                  0x00100000
++/* willow (SM6125 trinket): gcc@1400000, dwc3@4e00000, qusb@1613000 (major-rev 1), apps-smmu@c600000 */
++#define GCC_PA                  0x01400000
+ #define GCC_SIZE                0x00090000
+-#define GCC_USB30_PRIM_GDSCR    0x0f004         /* bit 31: power on */
++#define GCC_USB30_PRIM_GDSCR    0x1a004         /* bit 31: power on */
+ #define CBCR_CLK_OFF            (1u << 31)
+ 
+ static const struct {
+ 	const char *name;
+ 	uint32_t    off;
+ } usb_cbcr[] = {
+-	{ "master", 0x0f010 },
+-	{ "sleep", 0x0f014 },
+-	{ "utmi", 0x0f018 },
+-	{ "cfg-noc-axi", 0x0502c },
+-	{ "aggre-axi", 0x8201c },
+-	{ "ahb2phy", 0x6a004 },
+-	{ "clkref", 0x8c010 },
++	{ "master", 0x1a010 },
++	{ "sleep", 0x1a014 },
++	{ "utmi", 0x1a018 },
++	{ "cfg-noc-axi", 0x1a084 },
++	{ "aggre-axi", 0x1a080 },
++	{ "ahb2phy", 0x1d008 },
++	{ "clkref", 0x80278 },
+ };
+ 
+-#define DWC3_PA                 0x0a600000
++#define DWC3_PA                 0x04e00000
+ #define DWC3_SIZE               0x0000d000
+-#define QUSB2_PA                0x088e2000
+-#define QUSB2_SIZE              0x00000400
++#define QUSB2_PA                0x01613000
++#define QUSB2_SIZE              0x00000200
++#define SMMU_PA                 0x0c600000
++#define SMMU_SID                0x100u
+ 
+ static uint32_t
+ usb_rd(vm_offset_t base, uint32_t off)
+@@ -113,17 +116,13 @@ sweet_usb_probe(void)
+ 	printf("SWEET USB: DWC3 GEVNTADR 0x%08x%08x GEVNTSIZ 0x%08x GEVNTCOUNT 0x%08x GHWPARAMS0 0x%08x\n",
+ 	    usb_rd(dwc, 0xc404), usb_rd(dwc, 0xc400), usb_rd(dwc, 0xc408), usb_rd(dwc, 0xc40c),
+ 	    usb_rd(dwc, 0xc140));
+-	if (enabled >= 2) {
+-		sweet_usb_gadget_start(dwc);
+-	}
+-	if (cbcr[5] & CBCR_CLK_OFF) {
+-		printf("SWEET USB: ahb2phy clock off; QUSB2 PHY not read\n");
+-		return;
+-	}
+-	vm_offset_t phy = ml_io_map(QUSB2_PA, QUSB2_SIZE);
+-	if (phy == 0) {
+-		return;
+-	}
+-	/* DT qcom,qusb-phy-reg-offset order (Linux phy-msm-qusb-v2.c): PORT_TUNE1 0x240,
+-	 * PLL_COMMON_STATUS_ONE 0x1a0, PWR_CTRL1 0x210, INTR_CTRL 0x230,
+-	 * PLL_CORE_INPUT_OVERRIDE 0x0a8, TEST1 0x254. */
+-	printf("SWEET USB: QUSB2 PLL_STATUS 0x%08x PWR_CTRL1 0x%08x PORT_TUNE1 0x%08x TEST1 0x%08x\n",
+-	    usb_rd(phy, 0x1a0), usb_rd(phy, 0x210), usb_rd(phy, 0x240), usb_rd(phy, 0x254));
++	if (!(cbcr[5] & CBCR_CLK_OFF)) {
++		vm_offset_t phy = ml_io_map(QUSB2_PA, QUSB2_SIZE);
++		if (phy != 0) {
++			printf("SWEET USB: QUSB2 PLL_STATUS 0x%08x PORT_POWERDOWN 0x%08x PORT_TUNE1 0x%08x PORT_TUNE2 0x%08x\n",
++			    usb_rd(phy, 0x038), usb_rd(phy, 0x0b4), usb_rd(phy, 0x080), usb_rd(phy, 0x084));
++		}
++	}
++	if (enabled >= 2) {
++		sweet_usb_gadget_start(dwc);
++	}
+ }
+ 
+ /*
+@@ -161,7 +160,7 @@ sweet_usb_probe(void)
+  * controller only connects (pull-up on D+) while it sees a valid VBUS
+  * session; Linux dwc3-qcom forces that in software when the charger
+  * reports a cable (dwc3_qcom_vbus_override_enable).
+  */
+-#define QSCRATCH_PA             0x0a6f8800
++#define QSCRATCH_PA             0x04ef8800
+ #define QSCRATCH_HS_PHY_CTRL    0x10
+ #define   UTMI_OTG_VBUS_VALID   (1u << 20)
+ #define   SW_SESSVLD_SEL        (1u << 28)
