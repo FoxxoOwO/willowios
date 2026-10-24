@@ -168,3 +168,11 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
 - Extended tools/pack_evox_boot.py to take --payload <path> as ramdisk.
 - Packed shim/out/shim-evox-boot.img (17,739,776 bytes) containing full willow XNU kernel payload.
 - Ready for device boot test!
+
+## MILESTONE (2026-10-24, OBSERVED AND PHOTOGRAPHED): XNU KERNEL BOOT SUCCESS ON WILLOW!
+- Real Apple XNU Kernel booted natively on Redmi Note 8T (willow, SM6125 Trinket).
+- Kryo 260 Gold cluster at 2016 MHz, GICv3 interrupts, 1080x2340 framebuffer direct scanout @ 0x5c000000 stride 4320.
+- AppleKeyStore, IOWatchdog, IOCoreSurfaceRoot, SweetHID buttons & touch, MAC framework, AMFI, VM bootstrap, Mach zones, Firehose logging all initialized.
+- Reached BSD init waiting for root device.
+- Rebuilt payload with rd=ufsroot0 to trigger willow SDHCI eMMC 5.1 (0x04744000) driver and GPT userdata partition scanner.
+- Packed shim/out/shim-evox-boot.img ready for test.
