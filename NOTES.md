@@ -230,9 +230,12 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - `SWEET UFS: willow SDHCI eMMC host ready (pstate=0x1f800f0)`!
   - `panic: IOFindBSDRoot: SWEET UFS root ufsroot0 unavailable: 60 @IOKitBSDInit.cpp:778` (60 = `ETIMEDOUT`)
 - **Action**:
-  - Identified root cause of CMD17 timeout: `SDHCI_CLOCK_CONTROL` had `clk=0x3` (`INT_EN` + `INT_STABLE`), but `SDHCI_CLOCK_CARD_EN` (`0x0004`) was 0 (gated by bootloader handover), and Qualcomm `CORE_CLK_PWRSAVE` was not cleared.
-  - Added patch `0958-willow-sdhci-diag.patch`:
-    - Enables card clock output (`SDHCI_CLOCK_CARD_EN` = 0x4) and clears Qualcomm `CORE_CLK_PWRSAVE` at `su.regs + 0x20c`.
-    - Handles line resets with automatic card clock re-enablement.
-    - Adds `sdhci_cmd_simple` to query card status via CMD13 (RCA 1 / RCA 0), select the card via CMD7 if in `STBY`, and set block length 512 via CMD16.
-    - Standardizes SDHCI command sequencing to strict 16-bit halfword stores (`SDHCI_TRANSFER_MODE` then `SDHCI_COMMAND`), switches to single-sector transfers (`chunk = 1`, CMD17) to eliminate Auto-CMD12 issues, and adds fine-grained register logging (`hctrl`, `hc2`, `clk`, `pstate`, `cqcfg`, `is`).
+  - Observed from photo `media_1792912064518_321afbef.jpg`:
+    - `SWEET UFS: init: hctrl=0 hc2=0 clk=0x7 pstate=0x1f800f0 vspec=0x300a0c cqcfg=0`
+    - SD card clock was enabled (`clk=0x7`), and `CORE_CLK_PWRSAVE` was cleared (`vspec=0x300a0c`).
+    - However, commands (`CMD13`, `CMD16`, `CMD17`) still timed out with `is=0 pstate=0x1f800f1` (no hardware interrupt / timeout occurred), indicating the core clock generator or root clock is not ticking the SDHCI command state machine or divider was too fast.
+  - Updated patch `0958-willow-sdhci-diag.patch`:
+    - Maps Qualcomm GCC at `0x01400000` to inspect and enable `GCC_SDCC1_AHB_CLK` (`0x16008`) and `GCC_SDCC1_APPS_CLK` (`0x4a010`).
+    - Configures `core_mem` at `0x04745000`: verifies `CORE_POWER` (`0x0`) and sets `CORE_HC_MODE` (`0x78`, `HC_MODE_EN` = 1).
+    - Programs SDHCI clock control with standard stop-and-switch sequence using safe divider `N = 4` (divisor 8 = ~25 MHz / 12.5 MHz).
+    - Maintains single sector transfers, card state query (`CMD13`), card select (`CMD7`), block size 512 (`CMD16`), and diagnostic logging.

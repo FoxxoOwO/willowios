@@ -1,38 +1,99 @@
-Subject: [PATCH 958/958] willow: enable sdhci card clock, pwrsave clear, emmc select and 16-bit cmd sequencing
+Subject: [PATCH 958/958] willow: enable gcc sdcc1 clocks, core_mem hc_mode, sdhci card clock with safe divider
 
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -291,15 +291,95 @@
+@@ -290,16 +290,156 @@
+ #define SDHCI_INT_DATA_AVAIL    0x00000020u
  #define SDHCI_INT_ERROR         0x00008000u
  
- static void
++static vm_offset_t gcc_regs = 0;
++
++static void
++gcc_init_sdcc1(void)
++{
++	if (!gcc_regs) {
++		gcc_regs = ml_io_map(0x01400000u, 0x50000u);
++	}
++	if (!gcc_regs) {
++		printf("SWEET UFS: failed to map GCC\n");
++		return;
++	}
++
++	uint32_t ahb_cbcr = *(volatile uint32_t *)(gcc_regs + 0x16008u);
++	uint32_t apps_cbcr = *(volatile uint32_t *)(gcc_regs + 0x4a010u);
++	uint32_t rcgr_cmd = *(volatile uint32_t *)(gcc_regs + 0x26028u);
++	uint32_t rcgr_cfg = *(volatile uint32_t *)(gcc_regs + 0x2602cu);
++	printf("SWEET UFS: GCC: ahb=%#x apps=%#x (halt=%u en=%u) rcgr_cmd=%#x cfg=%#x\n",
++	       ahb_cbcr, apps_cbcr, (apps_cbcr >> 31) & 1, apps_cbcr & 1, rcgr_cmd, rcgr_cfg);
++
++	/* Enable SDCC1 AHB clock if not enabled */
++	if (!(ahb_cbcr & 1u)) {
++		*(volatile uint32_t *)(gcc_regs + 0x16008u) = ahb_cbcr | 1u;
++	}
++
++	/* Enable SDCC1 APPS branch clock if halted or not enabled */
++	if (!(apps_cbcr & 1u) || (apps_cbcr & (1u << 31))) {
++		*(volatile uint32_t *)(gcc_regs + 0x4a010u) = (apps_cbcr | 1u);
++		for (unsigned i = 0; i < 10000; i++) {
++			if (!(*(volatile uint32_t *)(gcc_regs + 0x4a010u) & (1u << 31))) {
++				break;
++			}
++			delay(10);
++		}
++		printf("SWEET UFS: GCC: apps cbcr after enable: %#x (halt=%u en=%u)\n",
++		       *(volatile uint32_t *)(gcc_regs + 0x4a010u),
++		       (*(volatile uint32_t *)(gcc_regs + 0x4a010u) >> 31) & 1,
++		       *(volatile uint32_t *)(gcc_regs + 0x4a010u) & 1);
++	}
++}
++
++static void
 +sdhci_enable_card_clock(void)
 +{
++	gcc_init_sdcc1();
++
++	/* Clear CORE_CLK_PWRSAVE (bit 1) in Qualcomm CORE_VENDOR_SPEC (offset 0x20c) */
 +	if (su.reg_size >= 0x300u) {
 +		uint32_t vspec = *(volatile uint32_t *)(su.regs + 0x20cu);
 +		vspec &= ~(1u << 1); /* clear CORE_CLK_PWRSAVE */
 +		*(volatile uint32_t *)(su.regs + 0x20cu) = vspec;
 +	}
 +
-+	uint16_t clk = *(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL);
-+	if (!(clk & 0x0001u)) {
-+		clk |= 0x0001u;
-+		*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = clk;
-+		for (unsigned i = 0; i < 10000; i++) {
-+			if (*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) & 0x0002u) {
-+				break;
-+			}
-+			delay(10);
++	/* Check core_mem (su.regs + 0x1000): CORE_POWER (0x0) and CORE_HC_MODE (0x78) */
++	if (su.reg_size >= 0x2000u) {
++		uint32_t pwr = *(volatile uint32_t *)(su.regs + 0x1000u);
++		uint32_t hc_mode = *(volatile uint32_t *)(su.regs + 0x1078u);
++		if (!(hc_mode & 1u)) {
++			*(volatile uint32_t *)(su.regs + 0x1078u) = hc_mode | 1u; /* HC_MODE_EN */
 +		}
++		printf("SWEET UFS: core_mem: pwr=%#x hc_mode=%#x -> %#x\n",
++		       pwr, hc_mode, *(volatile uint32_t *)(su.regs + 0x1078u));
 +	}
-+	clk = *(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL);
-+	clk |= 0x0004u; /* SDHCI_CLOCK_CARD_EN */
-+	*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = clk;
++
++	/* Configure SDHCI Clock with safe divider (N = 4, divisor = 8) */
++	uint16_t cur_clk = *(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL);
++	/* Stop clock */
++	*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = cur_clk & ~0x0005u;
++	delay(100);
++
++	/* Set divider N = 4 and enable internal clock */
++	uint16_t new_clk = (4u << 8) | 0x0001u;
++	*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = new_clk;
++	for (unsigned i = 0; i < 10000; i++) {
++		if (*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) & 0x0002u) {
++			break;
++		}
++		delay(10);
++	}
++
++	/* Enable card clock */
++	new_clk = *(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) | 0x0004u;
++	*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = new_clk;
 +	__builtin_arm_dsb(0xf);
 +	delay(2000);
 +}
 +
-+static void
+ static void
  sdhci_reset_lines(uint8_t mask)
  {
  	*(volatile uint8_t *)(su.regs + SDHCI_SOFTWARE_RESET) = mask;
@@ -99,7 +160,7 @@ Subject: [PATCH 958/958] willow: enable sdhci card clock, pwrsave clear, emmc se
  }
  
  static int
-@@ -308,35 +388,40 @@
+@@ -308,35 +448,40 @@
  	uint32_t *p = (uint32_t *)buf;
  
  	while (cnt > 0) {
@@ -148,7 +209,7 @@ Subject: [PATCH 958/958] willow: enable sdhci card clock, pwrsave clear, emmc se
  				sdhci_reset_lines(0x06);
  				return ETIMEDOUT;
  			}
-@@ -346,39 +431,43 @@
+@@ -346,39 +491,43 @@
  
  		uint32_t pmask = write ? SDHCI_SPACE_AVAILABLE : SDHCI_DATA_AVAILABLE;
  		uint32_t imask = write ? SDHCI_INT_SPACE_AVAIL : SDHCI_INT_DATA_AVAIL;
@@ -216,7 +277,7 @@ Subject: [PATCH 958/958] willow: enable sdhci card clock, pwrsave clear, emmc se
  				break;
  			}
  			delay(1);
-@@ -672,6 +761,35 @@
+@@ -672,6 +821,35 @@
  		*(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL) = hctrl & ~0x18u;
  		uint16_t hc2 = *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2);
  		*(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2) = hc2 & ~(1u << 12);
