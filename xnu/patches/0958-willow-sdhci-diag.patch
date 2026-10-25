@@ -1,8 +1,8 @@
-Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, card clock enable, and hc_mode
+Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, bus power on, safe divider and full int enable
 
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -291,15 +291,108 @@
+@@ -291,15 +291,107 @@
  #define SDHCI_INT_ERROR         0x00008000u
  
  static void
@@ -15,29 +15,31 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
 +		ufs_wr(0x20cu, vspec);
 +	}
 +
-+	/* Check core_mem (su.regs + 0x1000): CORE_HC_MODE (0x1078) */
-+	if (su.reg_size >= 0x2000u) {
-+		uint32_t hc_mode = ufs_rd(0x1078u);
-+		if (!(hc_mode & 1u)) {
-+			ufs_wr(0x1078u, hc_mode | 1u); /* HC_MODE_EN */
++	/* Turn on SD Bus Power (byte 1 of 0x28: SDHCI_POWER_CONTROL) */
++	uint32_t hctrl = ufs_rd(SDHCI_HOST_CONTROL);
++	uint32_t pwr = (hctrl >> 8) & 0xffu;
++	if (!(pwr & 1u)) {
++		pwr = (pwr ? pwr : 0x0eu) | 0x01u; /* SDHCI_POWER_ON | (3.3V or preserved) */
++	}
++	hctrl = (hctrl & ~0x0000ff18u) | (pwr << 8);
++	ufs_wr(SDHCI_HOST_CONTROL, hctrl);
++
++	/* Stop clock, configure safe divider N=8 and max timeout (0x0E), then enable card clock */
++	ufs_wr(SDHCI_CLOCK_CONTROL, (0x0Eu << 16));
++	delay(100);
++
++	uint32_t clk_cfg = (8u << 8) | 0x0001u | (0x0Eu << 16);
++	ufs_wr(SDHCI_CLOCK_CONTROL, clk_cfg);
++	for (unsigned i = 0; i < 10000; i++) {
++		if (ufs_rd(SDHCI_CLOCK_CONTROL) & 0x0002u) {
++			break;
 +		}
++		delay(10);
 +	}
 +
-+	/* Enable SDHCI Card Clock (SDHCI_CLOCK_CARD_EN = 0x0004) via 32-bit dword access */
-+	uint32_t clk_reg = ufs_rd(SDHCI_CLOCK_CONTROL);
-+	if (!(clk_reg & 0x0001u)) {
-+		clk_reg |= 0x0001u;
-+		ufs_wr(SDHCI_CLOCK_CONTROL, clk_reg);
-+		for (unsigned i = 0; i < 10000; i++) {
-+			if (ufs_rd(SDHCI_CLOCK_CONTROL) & 0x0002u) {
-+				break;
-+			}
-+			delay(10);
-+		}
-+	}
-+	clk_reg = ufs_rd(SDHCI_CLOCK_CONTROL);
-+	clk_reg |= 0x0004u; /* SDHCI_CLOCK_CARD_EN */
-+	ufs_wr(SDHCI_CLOCK_CONTROL, clk_reg);
++	/* Enable card clock */
++	clk_cfg |= 0x0004u;
++	ufs_wr(SDHCI_CLOCK_CONTROL, clk_cfg);
 +	__builtin_arm_dsb(0xf);
 +	delay(2000);
 +}
@@ -46,8 +48,6 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
  sdhci_reset_lines(uint8_t mask)
  {
 -	*(volatile uint8_t *)(su.regs + SDHCI_SOFTWARE_RESET) = mask;
-+	/* SDHCI_SOFTWARE_RESET is byte 3 of SDHCI_CLOCK_CONTROL (offset 0x2C).
-+	 * Read-modify-write via aligned 32-bit dword. */
 +	uint32_t reg = ufs_rd(SDHCI_CLOCK_CONTROL);
 +	reg |= ((uint32_t)mask << 24);
 +	ufs_wr(SDHCI_CLOCK_CONTROL, reg);
@@ -66,7 +66,7 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
 +	unsigned wait_us = 0;
 +	while (ufs_rd(SDHCI_PRESENT_STATE) & SDHCI_CMD_INHIBIT) {
 +		if (++wait_us > 1000000u) {
-+			printf("SDHCI: cmd %u inhibit timeout! pstate=%#x\n", cmd_idx, ufs_rd(SDHCI_PRESENT_STATE));
++			printf("SDHCI: cmd %u inhibit timeout! pstate=%#x is=%#x\n", cmd_idx, ufs_rd(SDHCI_PRESENT_STATE), ufs_rd(SDHCI_INT_STATUS));
 +			sdhci_reset_lines(0x02);
 +			return ETIMEDOUT;
 +		}
@@ -75,7 +75,6 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
 +	ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
 +	ufs_wr(SDHCI_ARGUMENT, arg);
 +	uint32_t cmd = (uint32_t)((cmd_idx << 8) | flags);
-+	/* Aligned 32-bit dword write at 0x0C: transfer_mode=0 (bits 15:0), command=cmd (bits 31:16) */
 +	ufs_wr(SDHCI_TRANSFER_MODE, cmd << 16);
 +	__builtin_arm_dsb(0xf);
 +
@@ -112,7 +111,7 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
  }
  
  static int
-@@ -308,35 +401,39 @@
+@@ -308,35 +400,37 @@
  	uint32_t *p = (uint32_t *)buf;
  
  	while (cnt > 0) {
@@ -129,7 +128,6 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
  		}
  		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
 -		ufs_wr(SDHCI_BLOCK_SIZE, 512u | ((chunk & 0xffffu) << 16));
-+		/* Aligned 32-bit dword write at 0x04: block_size=512 (bits 15:0), block_count=1 (bits 31:16) */
 +		ufs_wr(SDHCI_BLOCK_SIZE, 512u | (1u << 16));
  		ufs_wr(SDHCI_ARGUMENT, sector);
  
@@ -145,7 +143,6 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
 +		uint32_t cmd_idx = write ? 24u : 17u;
 +		uint32_t cmd = ((cmd_idx << 8) | 0x3au);
 +
-+		/* Aligned 32-bit dword write at 0x0C: transfer_mode (bits 15:0), command (bits 31:16) */
 +		ufs_wr(SDHCI_TRANSFER_MODE, mode | (cmd << 16));
 +		__builtin_arm_dsb(0xf);
  
@@ -163,7 +160,7 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
  				sdhci_reset_lines(0x06);
  				return ETIMEDOUT;
  			}
-@@ -346,39 +443,43 @@
+@@ -346,39 +440,43 @@
  
  		uint32_t pmask = write ? SDHCI_SPACE_AVAILABLE : SDHCI_DATA_AVAILABLE;
  		uint32_t imask = write ? SDHCI_INT_SPACE_AVAIL : SDHCI_INT_DATA_AVAIL;
@@ -231,7 +228,7 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
  				break;
  			}
  			delay(1);
-@@ -660,18 +761,46 @@
+@@ -660,18 +758,44 @@
  {
  	if (su.sdhci) {
  		if (su.reg_size >= 0x2000u) {
@@ -243,25 +240,24 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, c
  			}
  		}
  		ufs_wr(SDHCI_SIGNAL_ENABLE, 0);
- 		ufs_wr(SDHCI_INT_ENABLE, 0x03ff00fbu);
+-		ufs_wr(SDHCI_INT_ENABLE, 0x03ff00fbu);
++		ufs_wr(SDHCI_INT_ENABLE, 0xffffffffu); /* enable ALL error and normal interrupt status bits */
  		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
 -		uint8_t hctrl = *(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL);
 -		*(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL) = hctrl & ~0x18u;
 -		uint16_t hc2 = *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2);
 -		*(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2) = hc2 & ~(1u << 12);
-+		uint32_t hctrl32 = ufs_rd(SDHCI_HOST_CONTROL);
-+		ufs_wr(SDHCI_HOST_CONTROL, hctrl32 & ~0x00000018u);
 +		uint32_t hc2_32 = ufs_rd(0x3cu);
 +		ufs_wr(0x3cu, hc2_32 & ~(1u << (12 + 16)));
 +
 +		sdhci_enable_card_clock();
 +
-+		printf("SWEET UFS: init: hctrl=%#x clk=%#x pstate=%#x vspec=%#x hc_mode=%#x\n",
-+		       ufs_rd(SDHCI_HOST_CONTROL) & 0xffu,
-+		       ufs_rd(SDHCI_CLOCK_CONTROL) & 0xffffu,
++		printf("SWEET UFS: init: hctrl=%#x clk=%#x pstate=%#x cap=%#x cap1=%#x\n",
++		       ufs_rd(SDHCI_HOST_CONTROL),
++		       ufs_rd(SDHCI_CLOCK_CONTROL),
 +		       ufs_rd(SDHCI_PRESENT_STATE),
-+		       (su.reg_size >= 0x300u) ? ufs_rd(0x20cu) : 0,
-+		       (su.reg_size >= 0x2000u) ? ufs_rd(0x1078u) : 0);
++		       ufs_rd(0x40u),
++		       ufs_rd(0x44u));
 +
 +		uint32_t card_status = 0;
 +		if (sdhci_cmd_simple(13, 1u << 16, 0x1au, &card_status) == 0) {

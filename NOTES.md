@@ -230,15 +230,15 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - `SWEET UFS: willow SDHCI eMMC host ready (pstate=0x1f800f0)`!
   - `panic: IOFindBSDRoot: SWEET UFS root ufsroot0 unavailable: 60 @IOKitBSDInit.cpp:778` (60 = `ETIMEDOUT`)
 - **Action**:
-  - Observed from photo `media_1792913405684_2248e6a5.jpg`:
-    - Screen stopped at `bsd_init: calling setconf`: physical IO mapping of `0x01400000` (GCC) caused a synchronous abort because Qualcomm TrustZone restricts direct non-secure access to GCC clock controller registers on SM6125.
-    - Also discovered crucial hardware bus constraint: Qualcomm Snapdragon SM6125 peripheral interconnect bus (AHB/AXI) strictly enforces **32-bit DWORD aligned accesses** (`ufs_rd`/`ufs_wr`). 16-bit halfword stores (`*(volatile uint16_t *)`) drop byte strobes or are ignored by the bus fabric, explaining why previous 16-bit command stores resulted in no command dispatch.
+  - Observed from photo `media_1792914324240_d269d049.jpg`:
+    - Kernel booted cleanly without GCC abort.
+    - `SWEET UFS: init: hctrl=0 clk=0x7 pstate=0x1f800f0 vspec=0x300a0c hc_mode=0`
+    - SD bus power in `SDHCI_HOST_CONTROL` byte 1 (`SDHCI_POWER_CONTROL` at 0x29) was `0` (bus power off!).
+    - `SDHCI_INT_ENABLE` lacked bit 15 (`SDHCI_INT_ERROR`), preventing error reporting in `INT_STATUS`.
+    - Clock divider was at 0 (full uncalibrated frequency).
   - Updated patch `0958-willow-sdhci-diag.patch`:
-    - Removed unsafe GCC physical memory mapping.
-    - Converted ALL register reads and writes in `sweet_ufs.c` to strictly 32-bit DWORD accesses:
-      - `SDHCI_TRANSFER_MODE` (0x0C): 32-bit dword containing both Transfer Mode (bits 15:0) and Command (bits 31:16).
-      - `SDHCI_BLOCK_SIZE` (0x04): 32-bit dword containing both Block Size (bits 15:0) and Block Count (bits 31:16).
-      - `SDHCI_CLOCK_CONTROL` (0x2C): 32-bit read-modify-write enabling `SDHCI_CLOCK_CARD_EN` (0x4).
-      - Software line resets performed via 32-bit dword read-modify-write on offset 0x2C byte 3.
-      - Sets `HC_MODE_EN` (bit 0) in `core_mem` (`0x04745078`).
-      - Tests card state (`CMD13`), selects card (`CMD7`), sets block size 512 (`CMD16`), and reads sector 0 (`CMD17`) using single-sector 32-bit dword transfers.
+    - Powers ON the SD bus (`SDHCI_POWER_ON` = 0x01 in byte 1 of `0x28`).
+    - Enables ALL error and normal interrupt status bits (`SDHCI_INT_ENABLE = 0xffffffffu`).
+    - Configures safe clock divider `N = 8` (divide by 16) and sets hardware timeout counter (`0x0E`) in byte 2 of `0x2C`.
+    - Logs controller capabilities (`0x40`, `0x44`) and full 32-bit register states.
+    - Strictly maintains 32-bit DWORD aligned accesses throughout.
