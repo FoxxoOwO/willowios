@@ -1,0 +1,26 @@
+--- a/bsd/vm/vm_unix.c
++++ b/bsd/vm/vm_unix.c
+@@ -2487,7 +2487,11 @@
+ 				error));
+ 			goto done;
+ 		}
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++		if (0) { /* SWEET: allow dyld shared cache with non-root UID on unpacked rootfs */
++#else
+ 		if (va.va_uid != 0) {
++#endif
+ 			SHARED_REGION_TRACE_ERROR(
+ 				("shared_region: %p [%d(%s)] map(%p:'%s'): "
+ 				"owned by uid=%d instead of 0\n",
+@@ -2521,7 +2525,11 @@
+ 				goto done;
+ 			}
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++			if (0) { /* SWEET: allow shared cache without SF_RESTRICTED SIP flag */
++#else
+ 			if (!(va.va_flags & SF_RESTRICTED)) {
++#endif
+ 				/*
+ 				 * CSR is not configured in CSR_ALLOW_UNRESTRICTED_FS mode, and
+ 				 * the shared cache file is NOT SIP-protected, so reject the

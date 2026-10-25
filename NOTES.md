@@ -271,27 +271,21 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
     - Touch: `SWEET TOUCH: mapping GCC/TLMM/SE2`
   - XNU kernel is running interactively in `vfs_mountroot` retry loop waiting for an HFS+/APFS filesystem on `userdata`.
 
-## MILESTONE (2026-10-25, VERIFIED): iOS ROOTFS SPARSE IMAGE FLASHED & /sbin/launchd EXECUTED!
-- User flashed `scratch/iOSRoot.simg` to `userdata` and booted.
-- Verified from photo `media_1792924353394_86ec6d63.jpg`:
-  - `bsd_init: calling mountroot_post_hook` -> HFS+ filesystem on `/dev/disk0` (`userdata`) mounted cleanly!
-  - `bsd_init: done`
-  - `Serial keyboard started`
-  - `VM Swap Subsystem is ON`
-  - `load_init_program: attempting to load /sbin/launchd` -> launchd Mach-O loaded and started execution!
-  - Panic: `unexpected SIGKILL of launchd (CS_KILLED) with reason -- namespace 9 code 0xe description none`
-- Root Cause Analysis of Panic:
-  - Namespace 9 = `OS_REASON_EXEC`
-  - Code `0xe` (14) = `EXEC_EXIT_REASON_WRONG_PLATFORM`
-  - In `bsd/kern/kern_exec.c:check_for_signature()`, XNU is built from macOS sources (`XNU_TARGET_OS_OSX`), while `/sbin/launchd` from iPhone 8 iOS 16.7.16 has platform `PLATFORM_IOS` (2).
-  - Without the proper boot-arg, `check_for_signature()` rejects the iOS platform binary spawned without `posix_spawnattr` platform override and kills PID 1.
+## MILESTONE (2026-10-25, OBSERVED AND PHOTOGRAPHED): LIBIGNITION & LAUNCHD.1 BOOTED!
+- User flashed updated `shim/out/shim-evox-boot.img` with `unentitled_ios_sim_launch=1`.
+- Verified from photo `media_1792925275652_27d592a5.jpg`:
+  - `libignition: 1: hello: hello from launchd.1`!
+  - `libignition: 1: dylib_cache: opened shared cache directory: /System/Library/Caches/com.apple.dyld`!
+  - `libignition: 1: goodbye: ignition sequence complete`!
+  - launchd completed ignition phase 1 and invoked `vm_shared_region_map_file()`.
+  - Panic: `panic(cpu 0): initproc failed to start - exit reason namespace 6 subcode 0x1 description: Library not loaded: /usr/lib/libSystem.B.dylib (no such file, no dyld cache)`.
+  - Root cause logged on screen:
+    - `shared_region: ... map('...:dyld_shared_cache_arm64'): not in trust cache` -> falls back to `root_check:` in `bsd/vm/vm_unix.c`.
+    - `shared_region: ... map('...:dyld_shared_cache_arm64'): owned by uid=501 instead of 0` -> `root_check` failed with `EPERM` because the image was created on macOS runner with runner UID 501.
+    - `vm_shared_region_start_address() failed` -> dyld shared cache was not mapped into address space, so dyld could not find `/usr/lib/libSystem.B.dylib`.
 - Resolution:
-  - Repacked payload with complete iOS bring-up boot-args from `tools/kbuild.sh`:
-    `unentitled_ios_sim_launch=1 ignition_level=1 launchd_unsecure_cache=1 wdt_test=no_user_checkin wdt=-1 ufsrw=1 rootrw=1 sweetfb_hz=60`
-  - `unentitled_ios_sim_launch=1` bypasses the platform check in `check_for_signature()` and logs:
-    `Allowing spawn of iOS binary launchd since it has ... unentitled_ios_sim_launch boot-arg set to true`.
-  - `ignition_level=1` loads the dyld shared cache.
-  - Repacked into [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img) (17,756,160 bytes).
-- Next Action: Put phone in Fastboot mode (Hold Volume Down + Power), flash `shim/out/shim-evox-boot.img` and reboot to launch iOS userland!
+  - Added patch `0959-willow-shared-region-uid-check.patch`: allows dyld shared cache with non-root UID (501) and bypasses `SF_RESTRICTED` SIP flag under `ARM64_BOARD_CONFIG_SWEET`.
+  - Pushed to main to trigger GitHub Actions build of XNU kernel.
+
 
 
