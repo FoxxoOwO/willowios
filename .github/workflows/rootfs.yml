@@ -1,0 +1,53 @@
+name: rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipsw_url:
+        description: Direct Apple CDN URL to IPSW
+        default: "https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77002/0281BFC6-38ED-485A-A8BE-8871861174B1/iPhone_4.7_P3_16.7.16_20H392_Restore.ipsw"
+
+jobs:
+  build-rootfs:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download IPSW from Apple CDN
+        run: |
+          echo "Downloading IPSW from ${{ github.event.inputs.ipsw_url }}..."
+          curl -fSL -o ipsw.zip "${{ github.event.inputs.ipsw_url }}"
+          ls -lh ipsw.zip
+
+      - name: Extract DMGs
+        run: |
+          mkdir -p dmgs
+          unzip -p ipsw.zip BuildManifest.plist > BuildManifest.plist
+          # Extract OS and Cryptex DMGs
+          unzip -q ipsw.zip "087-86684-044.dmg" "087-86580-047.dmg" "087-86715-047.dmg" -d dmgs/
+          ls -lh dmgs/
+
+      - name: Build HFS+ iOSRoot
+        run: |
+          chmod +x tools/mkiosroot_macos.sh
+          bash ./tools/mkiosroot_macos.sh dmgs/087-86684-044.dmg dmgs/087-86580-047.dmg dmgs/087-86715-047.dmg iOSRoot.raw 16g
+          ls -lh iOSRoot.raw
+
+      - name: Convert to Android Sparse Image
+        run: |
+          python3 tools/img2simg.py iOSRoot.raw iOSRoot.simg
+          ls -lh iOSRoot.simg
+          rm -f iOSRoot.raw ipsw.zip dmgs/*.dmg
+
+      - name: Compress Sparse Image for Download
+        run: |
+          tar -czf iOSRoot.simg.tar.gz iOSRoot.simg
+          ls -lh iOSRoot.simg.tar.gz
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOSRoot-sparse-image
+          path: iOSRoot.simg.tar.gz
+          retention-days: 7

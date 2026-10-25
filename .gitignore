@@ -6,6 +6,8 @@ recovery/
 # stock fastboot ROM archives
 *.tgz
 *.tar
+*.ipsw
+*.dmg
 # third-party/Apple sources fetched for reading
 research/
 shim/out/
