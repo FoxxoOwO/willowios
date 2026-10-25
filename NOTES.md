@@ -243,4 +243,15 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
     - Logs controller capabilities (`0x40`, `0x44`) and full 32-bit register states.
     - Strictly maintains 32-bit DWORD aligned accesses throughout.
   - Built in CI run `40174285141` (commit `bf9b65a`), downloaded `kernel.development.sweet`, generated `xnu/out/payload.bin` and repacked `shim/out/shim-evox-boot.img` (17,756,160 bytes).
-  - Next step: Flash `shim/out/shim-evox-boot.img` and observe controller caps, bus power, and eMMC response.
+- **Observed on Hardware (Photo `media_1792915870192_8cd84861.jpg`)**:
+  - `SWEET UFS: init: hctrl=0xf00 clk=0xe0807 pstate=0x1f800f0 cap=0x742dc8b2 cap1=0x808f`
+  - Bus power and clock were alive!
+  - `CMD17` (read sector 0) received response and card transmitted data (`pstate=0x1f8002f6`, `Read transfer active: 1`, `DAT line active: 1`).
+  - Error: `SDHCI: DATA error! is=0x208000` (`SDHCI_INT_DATA_CRC = 0x200000`).
+  - Cause: Host controller was in 1-bit bus width (`hctrl=0xf00`, byte 0 was 0), but eMMC card was left by ABL in 8-bit bus width (`qcom,bus-width = <8>`). Controller read only DAT0 and CRC check failed.
+  - Also: Controller capabilities (`0x40`) confirmed voltage is 1.8V (bit 26 = 1), not 3.3V.
+- **Fix (commit `7845eff`, CI run `40176292616`)**:
+  - Sets 1.8V bus power (`0x0B00`).
+  - Implements dynamic auto-calibration of bus width (8-bit `0x20`/`0x24`, 4-bit `0x02`/`0x06`, 1-bit `0x00`) and clock dividers (8, 4, 0) by test-reading sector 0.
+  - Probes RCA 2, 1, 0 for CMD13.
+  - Repacked local `shim/out/shim-evox-boot.img` (17,756,160 bytes).
