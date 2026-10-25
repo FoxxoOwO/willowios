@@ -195,12 +195,22 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('kernel'); ap.add_argument('adt'); ap.add_argument('out')
+    ap.add_argument('kernel', nargs='?', default=None)
+    ap.add_argument('adt', nargs='?', default=None)
+    ap.add_argument('out', nargs='?', default=None)
+    ap.add_argument('-k', '--kernel-file', dest='k_flag')
+    ap.add_argument('-d', '--adt-file', dest='d_flag')
+    ap.add_argument('-o', '--out-file', dest='o_flag')
     ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1')
     ap.add_argument('--ramdisk', help='root image for md0 (boot with rd=md0)')
     a = ap.parse_args()
-    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk)
-    open(a.out, 'wb').write(blob)
+    k = a.k_flag or a.kernel
+    d = a.d_flag or a.adt
+    o = a.o_flag or a.out
+    if not (k and d and o):
+        ap.error('kernel, adt, and out must be provided (either as positional args or via -k, -d, -o)')
+    blob, info = build(k, d, a.cmdline, a.ramdisk)
+    open(o, 'wb').write(blob)
     for k, v in info.items():
         if k != 'segs':
             print(f'{k}: {v}')
