@@ -30,8 +30,7 @@ jobs:
 
       - name: Build HFS+ iOSRoot
         run: |
-          chmod +x tools/mkiosroot_macos.sh
-          bash ./tools/mkiosroot_macos.sh dmgs/087-86684-044.dmg dmgs/087-86580-047.dmg dmgs/087-86715-047.dmg iOSRoot.raw 16g
+          python3 tools/mkiosroot_macos.py dmgs/087-86684-044.dmg dmgs/087-86580-047.dmg dmgs/087-86715-047.dmg iOSRoot.raw 16g
           ls -lh iOSRoot.raw
 
       - name: Convert to Android Sparse Image
