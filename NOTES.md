@@ -179,3 +179,14 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
 
 - Rebuilt payload with startup_debug=1 -v rd=ufsroot0 to make XNU verbose on kernel_bootstrap_thread execution.
 - Ready for device boot test!
+
+## Root Cause Discovery: Silent Console & `kprintf` Suppression (2026-10-25)
+- Discovered why console appeared frozen after `debug_log_init: Error!! gPanicBase is still not initialized`:
+  1. `debug_log_init()` prints a warning when `gPanicBase` is uninitialized and returns cleanly (no hang, no crash).
+  2. All subsequent initialization logs (`kernel_bootstrap_log`, `kernel_bootstrap_thread_log`) use `kprintf()`.
+  3. In `xnu/pexpert/arm/pe_kprintf.c`, `DEVELOPMENT` builds default to `disable_kprintf_output = true` unless `-enable_kprintf_spam` is present in `boot-args`.
+  4. Without `-enable_kprintf_spam`, all bootstrap/thread progress logging was silently suppressed.
+- Rebuilt payload and boot image with `-enable_kprintf_spam`:
+  - Cmdline: `debug=0xc serial=3 cpus=1 keepsyms=1 startup_debug=1 -v -enable_kprintf_spam rd=ufsroot0`
+  - Regenerated `xnu/out/payload.bin` and packed [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img).
+- Next action: Put phone in fastboot mode (Vol Down + Power), flash [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img), and observe the unsuppressed kernel bootstrap sequence.
