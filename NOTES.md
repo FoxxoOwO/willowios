@@ -190,3 +190,15 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - Cmdline: `debug=0xc serial=3 cpus=1 keepsyms=1 startup_debug=1 -v -enable_kprintf_spam rd=ufsroot0`
   - Regenerated `xnu/out/payload.bin` and packed [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img).
 - Next action: Put phone in fastboot mode (Vol Down + Power), flash [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img), and observe the unsuppressed kernel bootstrap sequence.
+
+## MILESTONE (2026-10-25, OBSERVED AND PHOTOGRAPHED): BSD SUBSYSTEM REACHED!
+- Real Apple XNU Kernel on Willow (`kernel.development.sweet`) booted all the way through Mach and IOKit into BSD!
+- Display verified with `-enable_kprintf_spam`:
+  - Phase 16 (`STARTUP_SUB_EARLY_BOOT`) complete
+  - HMAC-SHA256, libpthread-514.100.2, XML entitlements AMFI, vnguard guarded vnode policy all loaded
+  - IOKit platform expert registered
+  - Gold CPU 0 entered `initCPU mpidr=0x100 EL1 IRQs=1`, `came alive; SGI1 OK`
+  - `AppleMobileFileIntegrity` service published
+  - BSD initialization reached: printed official Berkeley copyright banner:
+    `Copyright (c) 1982, 1986, 1989, 1991, 1993\n  The Regents of the University of California. All rights reserved.`
+  - Cursor resting right at root device lookup (`IOFindBSDRoot` / `sweet-ufs`).
