@@ -212,3 +212,22 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - Because Trinket / continuous splash display controller does not dynamic page-flip without full DPU clock/bus handover, the screen continued scanning `0x5c000000`, while all subsequent kernel logging went into the unseen shadow buffer `c`!
 - **Resolution**:
   - Added patch `0957-willow-fb-direct-console.patch`: requires boot-arg `sweetfb_shadow=1` to allocate shadow buffer; by default leaves `fCons = NULL`, so `sweet_console_retarget` is never called and the console draws directly to `0x5c000000` throughout the entire boot!
+
+## MILESTONE (2026-10-25, OBSERVED AND PHOTOGRAPHED): FULL CONSOLE UNBLOCKED & SDHCI STORAGE REACHED!
+- Real Apple XNU Kernel on Willow with patch 0957 kept console directly on `0x5c000000` throughout entire boot!
+- Verified from photo `media_1792909168120_5348aa98.jpg`:
+  - `bsd_init: calling proc_uuid_policy_init()`
+  - `mcache: 1 CPU(s), 64 bytes CPU cache line size`
+  - `bsd_init: calling mbinit` -> `mbinit: done [64 MB total pool size, (42/21) split]`
+  - `bsd_init: calling audit_init`, `knote_init`, `eventhandler_init`, `aio_init`, `pshm_cache_init`
+  - `dlil_init: All the created dlil kernel threads have been scheduled at least once. Proceeding.`
+  - `bsd_init: calling socketinit`, `domaininit`, `skywalk_init`
+  - Skywalk memory regions initialized, all 18 Skywalk self-tests PASSED (`sk_copy64`, `sk_copy32`, `sk_zero`, `memcmp mask`)
+  - `bsd_init: calling memorystatus_init`, `sysctl_mib_init`, `bsd_autoconf`, `kminit`, `loopattach`
+  - Network interfaces `lo0`, `gif0`, `stf0` attached and threads scheduled
+  - `bsd_init: calling ether_family_init`, `net_init_run`, `inittodr`
+  - `bsd_init: calling setconf`
+  - `SWEET UFS: willow SDHCI eMMC host ready (pstate=0x1f800f0)`!
+  - `panic: IOFindBSDRoot: SWEET UFS root ufsroot0 unavailable: 60 @IOKitBSDInit.cpp:778` (60 = `ETIMEDOUT`)
+- **Action**:
+  - Added patch `0958-willow-sdhci-diag.patch`: standardizes SDHCI command sequencing to strict 16-bit halfword stores (`SDHCI_TRANSFER_MODE` then `SDHCI_COMMAND`), switches to single-sector transfers (`chunk = 1`, CMD17) to eliminate Auto-CMD12 issues, and adds fine-grained register logging (`hctrl`, `hc2`, `clk`, `pstate`, `cqcfg`, `is`).
