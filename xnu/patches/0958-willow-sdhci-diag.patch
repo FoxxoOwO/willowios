@@ -1,12 +1,17 @@
-Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, bus power on, safe divider and full int enable
+Subject: [PATCH 958/958] willow: sdhci 8-bit bus width, 1.8V bus power, auto-calibration and diag
 
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -291,15 +291,107 @@
+@@ -290,16 +290,112 @@
+ #define SDHCI_INT_DATA_AVAIL    0x00000020u
  #define SDHCI_INT_ERROR         0x00008000u
  
- static void
-+sdhci_enable_card_clock(void)
++static uint8_t g_sdhci_width = 0x20;
++static uint16_t g_sdhci_div = 8;
++static int g_sdhci_calib = 1;
++
++static void
++sdhci_set_config(uint8_t width, uint16_t clk_div)
 +{
 +	/* Clear CORE_CLK_PWRSAVE (bit 1) in Qualcomm CORE_VENDOR_SPEC (offset 0x20c) */
 +	if (su.reg_size >= 0x300u) {
@@ -15,20 +20,15 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 +		ufs_wr(0x20cu, vspec);
 +	}
 +
-+	/* Turn on SD Bus Power (byte 1 of 0x28: SDHCI_POWER_CONTROL) */
-+	uint32_t hctrl = ufs_rd(SDHCI_HOST_CONTROL);
-+	uint32_t pwr = (hctrl >> 8) & 0xffu;
-+	if (!(pwr & 1u)) {
-+		pwr = (pwr ? pwr : 0x0eu) | 0x01u; /* SDHCI_POWER_ON | (3.3V or preserved) */
-+	}
-+	hctrl = (hctrl & ~0x0000ff18u) | (pwr << 8);
++	/* Turn on SD Bus Power: 1.8V (0x0A) | POWER_ON (0x01) = 0x0B in byte 1 */
++	uint32_t hctrl = (0x0Bu << 8) | (uint32_t)width;
 +	ufs_wr(SDHCI_HOST_CONTROL, hctrl);
 +
-+	/* Stop clock, configure safe divider N=8 and max timeout (0x0E), then enable card clock */
++	/* Stop clock, configure divider and max timeout (0x0E) */
 +	ufs_wr(SDHCI_CLOCK_CONTROL, (0x0Eu << 16));
 +	delay(100);
 +
-+	uint32_t clk_cfg = (8u << 8) | 0x0001u | (0x0Eu << 16);
++	uint32_t clk_cfg = ((uint32_t)clk_div << 8) | 0x0001u | (0x0Eu << 16);
 +	ufs_wr(SDHCI_CLOCK_CONTROL, clk_cfg);
 +	for (unsigned i = 0; i < 10000; i++) {
 +		if (ufs_rd(SDHCI_CLOCK_CONTROL) & 0x0002u) {
@@ -44,7 +44,7 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 +	delay(2000);
 +}
 +
-+static void
+ static void
  sdhci_reset_lines(uint8_t mask)
  {
 -	*(volatile uint8_t *)(su.regs + SDHCI_SOFTWARE_RESET) = mask;
@@ -57,7 +57,7 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
  		}
  		delay(1);
  	}
-+	sdhci_enable_card_clock();
++	sdhci_set_config(g_sdhci_width, g_sdhci_div);
 +}
 +
 +static int
@@ -66,7 +66,9 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 +	unsigned wait_us = 0;
 +	while (ufs_rd(SDHCI_PRESENT_STATE) & SDHCI_CMD_INHIBIT) {
 +		if (++wait_us > 1000000u) {
-+			printf("SDHCI: cmd %u inhibit timeout! pstate=%#x is=%#x\n", cmd_idx, ufs_rd(SDHCI_PRESENT_STATE), ufs_rd(SDHCI_INT_STATUS));
++			if (!g_sdhci_calib) {
++				printf("SDHCI: cmd %u inhibit timeout! pstate=%#x is=%#x\n", cmd_idx, ufs_rd(SDHCI_PRESENT_STATE), ufs_rd(SDHCI_INT_STATUS));
++			}
 +			sdhci_reset_lines(0x02);
 +			return ETIMEDOUT;
 +		}
@@ -82,12 +84,16 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 +	while (!(ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_RESPONSE)) {
 +		uint32_t is = ufs_rd(SDHCI_INT_STATUS);
 +		if (is & SDHCI_INT_ERROR) {
-+			printf("SDHCI: cmd %u error! is=%#x pstate=%#x\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE));
++			if (!g_sdhci_calib) {
++				printf("SDHCI: cmd %u error! is=%#x pstate=%#x\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE));
++			}
 +			sdhci_reset_lines(0x02);
 +			return EIO;
 +		}
 +		if (++wait_us > 1000000u) {
-+			printf("SDHCI: cmd %u resp timeout! is=%#x pstate=%#x\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE));
++			if (!g_sdhci_calib) {
++				printf("SDHCI: cmd %u resp timeout! is=%#x pstate=%#x\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE));
++			}
 +			sdhci_reset_lines(0x02);
 +			return ETIMEDOUT;
 +		}
@@ -101,7 +107,6 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 +		wait_us = 0;
 +		while (ufs_rd(SDHCI_PRESENT_STATE) & SDHCI_DATA_INHIBIT) {
 +			if (++wait_us > 2000000u) {
-+				printf("SDHCI: cmd %u busy timeout! pstate=%#x\n", cmd_idx, ufs_rd(SDHCI_PRESENT_STATE));
 +				break;
 +			}
 +			delay(1);
@@ -111,7 +116,7 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
  }
  
  static int
-@@ -308,35 +400,37 @@
+@@ -308,35 +404,43 @@
  	uint32_t *p = (uint32_t *)buf;
  
  	while (cnt > 0) {
@@ -119,8 +124,11 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 +		uint32_t chunk = 1; /* single sector transfers for maximum compatibility */
  		unsigned wait_us = 0;
  		while (ufs_rd(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) {
- 			if (++wait_us > 5000000u) {
-+				printf("SDHCI: inhibit timeout! pstate=%#x is=%#x\n", ufs_rd(SDHCI_PRESENT_STATE), ufs_rd(SDHCI_INT_STATUS));
+-			if (++wait_us > 5000000u) {
++			if (++wait_us > 2000000u) {
++				if (!g_sdhci_calib) {
++					printf("SDHCI: inhibit timeout! pstate=%#x is=%#x\n", ufs_rd(SDHCI_PRESENT_STATE), ufs_rd(SDHCI_INT_STATUS));
++				}
  				sdhci_reset_lines(0x06);
  				return ETIMEDOUT;
  			}
@@ -151,16 +159,21 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 -			if (ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_ERROR) {
 +			uint32_t is = ufs_rd(SDHCI_INT_STATUS);
 +			if (is & SDHCI_INT_ERROR) {
-+				printf("SDHCI: CMD%u error! is=%#x pstate=%#x\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE));
++				if (!g_sdhci_calib) {
++					printf("SDHCI: CMD%u error! is=%#x pstate=%#x\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE));
++				}
  				sdhci_reset_lines(0x06);
  				return EIO;
  			}
- 			if (++wait_us > 5000000u) {
-+				printf("SDHCI: CMD%u resp timeout! is=%#x pstate=%#x sector=%u\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE), sector);
+-			if (++wait_us > 5000000u) {
++			if (++wait_us > 2000000u) {
++				if (!g_sdhci_calib) {
++					printf("SDHCI: CMD%u resp timeout! is=%#x pstate=%#x sector=%u\n", cmd_idx, is, ufs_rd(SDHCI_PRESENT_STATE), sector);
++				}
  				sdhci_reset_lines(0x06);
  				return ETIMEDOUT;
  			}
-@@ -346,39 +440,43 @@
+@@ -346,39 +450,51 @@
  
  		uint32_t pmask = write ? SDHCI_SPACE_AVAILABLE : SDHCI_DATA_AVAILABLE;
  		uint32_t imask = write ? SDHCI_INT_SPACE_AVAIL : SDHCI_INT_DATA_AVAIL;
@@ -171,11 +184,24 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 -				if (ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_ERROR) {
 -					sdhci_reset_lines(0x06);
 -					return EIO;
--				}
++		wait_us = 0;
++		while (!(ufs_rd(SDHCI_PRESENT_STATE) & pmask) &&
++		       !(ufs_rd(SDHCI_INT_STATUS) & imask)) {
++			uint32_t is = ufs_rd(SDHCI_INT_STATUS);
++			if (is & SDHCI_INT_ERROR) {
++				if (!g_sdhci_calib) {
++					printf("SDHCI: DATA error! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
+ 				}
 -				if (++wait_us > 5000000u) {
 -					sdhci_reset_lines(0x06);
 -					return ETIMEDOUT;
--				}
++				sdhci_reset_lines(0x06);
++				return EIO;
++			}
++			if (++wait_us > 2000000u) {
++				if (!g_sdhci_calib) {
++					printf("SDHCI: DATA avail timeout! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
+ 				}
 -				delay(1);
 -			}
 -			ufs_wr(SDHCI_INT_STATUS, imask);
@@ -187,17 +213,6 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 -				for (unsigned w = 0; w < 512u / 4u; w++) {
 -					*p++ = ufs_rd(SDHCI_BUFFER);
 -				}
-+		wait_us = 0;
-+		while (!(ufs_rd(SDHCI_PRESENT_STATE) & pmask) &&
-+		       !(ufs_rd(SDHCI_INT_STATUS) & imask)) {
-+			uint32_t is = ufs_rd(SDHCI_INT_STATUS);
-+			if (is & SDHCI_INT_ERROR) {
-+				printf("SDHCI: DATA error! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
-+				sdhci_reset_lines(0x06);
-+				return EIO;
-+			}
-+			if (++wait_us > 5000000u) {
-+				printf("SDHCI: DATA avail timeout! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
 +				sdhci_reset_lines(0x06);
 +				return ETIMEDOUT;
 +			}
@@ -219,16 +234,21 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 -			if (ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_ERROR) {
 +			uint32_t is = ufs_rd(SDHCI_INT_STATUS);
 +			if (is & SDHCI_INT_ERROR) {
-+				printf("SDHCI: DATA_END error! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
++				if (!g_sdhci_calib) {
++					printf("SDHCI: DATA_END error! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
++				}
  				sdhci_reset_lines(0x06);
  				return EIO;
  			}
- 			if (++wait_us > 5000000u) {
-+				printf("SDHCI: DATA_END timeout! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
+-			if (++wait_us > 5000000u) {
++			if (++wait_us > 2000000u) {
++				if (!g_sdhci_calib) {
++					printf("SDHCI: DATA_END timeout! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
++				}
  				break;
  			}
  			delay(1);
-@@ -660,18 +758,44 @@
+@@ -660,18 +776,73 @@
  {
  	if (su.sdhci) {
  		if (su.reg_size >= 0x2000u) {
@@ -247,35 +267,64 @@ Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, b
 -		*(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL) = hctrl & ~0x18u;
 -		uint16_t hc2 = *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2);
 -		*(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2) = hc2 & ~(1u << 12);
-+		uint32_t hc2_32 = ufs_rd(0x3cu);
-+		ufs_wr(0x3cu, hc2_32 & ~(1u << (12 + 16)));
 +
-+		sdhci_enable_card_clock();
-+
-+		printf("SWEET UFS: init: hctrl=%#x clk=%#x pstate=%#x cap=%#x cap1=%#x\n",
++		printf("SWEET UFS: raw: hctrl=%#x clk=%#x pstate=%#x cap=%#x hc2=%#x vspec=%#x dll=%#x\n",
 +		       ufs_rd(SDHCI_HOST_CONTROL),
 +		       ufs_rd(SDHCI_CLOCK_CONTROL),
 +		       ufs_rd(SDHCI_PRESENT_STATE),
 +		       ufs_rd(0x40u),
-+		       ufs_rd(0x44u));
++		       ufs_rd(0x3cu),
++		       (su.reg_size >= 0x300u) ? ufs_rd(0x20cu) : 0,
++		       (su.reg_size >= 0x300u) ? ufs_rd(0x200u) : 0);
 +
-+		uint32_t card_status = 0;
-+		if (sdhci_cmd_simple(13, 1u << 16, 0x1au, &card_status) == 0) {
-+			uint32_t st = (card_status >> 9) & 0xfu;
-+			printf("SWEET UFS: eMMC card status %#x (state=%u)\n", card_status, st);
-+			if (st == 3) {
-+				printf("SWEET UFS: card in STBY, selecting via CMD7...\n");
-+				sdhci_cmd_simple(7, 1u << 16, 0x1bu, NULL);
-+			}
-+		} else if (sdhci_cmd_simple(13, 0, 0x1au, &card_status) == 0) {
-+			uint32_t st = (card_status >> 9) & 0xfu;
-+			printf("SWEET UFS: eMMC RCA 0 status %#x (state=%u)\n", card_status, st);
-+			if (st == 3) {
-+				printf("SWEET UFS: card in STBY, selecting via CMD7...\n");
-+				sdhci_cmd_simple(7, 0, 0x1bu, NULL);
++		/* Initial clock & power setup */
++		sdhci_set_config(g_sdhci_width, g_sdhci_div);
++
++		/* Probe RCA for CMD13 (2, 1, 0) */
++		uint32_t rcas[] = { 2u << 16, 1u << 16, 0 };
++		for (int i = 0; i < 3; i++) {
++			uint32_t card_status = 0;
++			if (sdhci_cmd_simple(13, rcas[i], 0x1au, &card_status) == 0) {
++				uint32_t st = (card_status >> 9) & 0xfu;
++				printf("SWEET UFS: eMMC card status %#x (state=%u, rca=%u)\n",
++				       card_status, st, rcas[i] >> 16);
++				if (st == 3) {
++					printf("SWEET UFS: card in STBY, selecting via CMD7...\n");
++					sdhci_cmd_simple(7, rcas[i], 0x1bu, NULL);
++				}
++				break;
 +			}
 +		}
-+		sdhci_cmd_simple(16, 512, 0x1au, NULL);
++
++		/* Auto-calibrate bus width and clock by test-reading sector 0 */
++		static uint8_t test_buf[512] __attribute__((aligned(64)));
++		bool probed = false;
++		uint8_t try_widths[] = { 0x20, 0x24, 0x02, 0x06, 0x00 };
++		uint16_t try_divs[] = { 8, 4, 0 };
++
++		g_sdhci_calib = 1;
++		for (unsigned d = 0; d < sizeof(try_divs)/sizeof(try_divs[0]) && !probed; d++) {
++			for (unsigned w = 0; w < sizeof(try_widths)/sizeof(try_widths[0]) && !probed; w++) {
++				sdhci_set_config(try_widths[w], try_divs[d]);
++				if (sdhci_rw_sectors(0, 1, test_buf, false) == 0) {
++					g_sdhci_width = try_widths[w];
++					g_sdhci_div = try_divs[d];
++					probed = true;
++					printf("SWEET UFS: calibrate OK! width=%#x div=%u (sector 0 read PASSED)\n",
++					       g_sdhci_width, g_sdhci_div);
++					break;
++				}
++			}
++		}
++		g_sdhci_calib = 0;
++
++		if (!probed) {
++			/* Fallback to 8-bit bus width, divider 8 */
++			printf("SWEET UFS: calibration failed, defaulting to width 0x20 div 8\n");
++			g_sdhci_width = 0x20;
++			g_sdhci_div = 8;
++			sdhci_set_config(g_sdhci_width, g_sdhci_div);
++		}
 +
  		printf("SWEET UFS: willow SDHCI eMMC host ready (pstate=%#x)\n", ufs_rd(SDHCI_PRESENT_STATE));
  		return 0;
