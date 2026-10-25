@@ -242,3 +242,5 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
     - Configures safe clock divider `N = 8` (divide by 16) and sets hardware timeout counter (`0x0E`) in byte 2 of `0x2C`.
     - Logs controller capabilities (`0x40`, `0x44`) and full 32-bit register states.
     - Strictly maintains 32-bit DWORD aligned accesses throughout.
+  - Built in CI run `40174285141` (commit `bf9b65a`), downloaded `kernel.development.sweet`, generated `xnu/out/payload.bin` and repacked `shim/out/shim-evox-boot.img` (17,756,160 bytes).
+  - Next step: Flash `shim/out/shim-evox-boot.img` and observe controller caps, bus power, and eMMC response.
