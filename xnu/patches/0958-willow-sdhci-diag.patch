@@ -1,105 +1,58 @@
-Subject: [PATCH 958/958] willow: enable gcc sdcc1 clocks, core_mem hc_mode, sdhci card clock with safe divider
+Subject: [PATCH 958/958] willow: sdhci strictly 32-bit dword aligned accesses, card clock enable, and hc_mode
 
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -290,16 +290,156 @@
- #define SDHCI_INT_DATA_AVAIL    0x00000020u
+@@ -291,15 +291,108 @@
  #define SDHCI_INT_ERROR         0x00008000u
  
-+static vm_offset_t gcc_regs = 0;
-+
-+static void
-+gcc_init_sdcc1(void)
+ static void
++sdhci_enable_card_clock(void)
 +{
-+	if (!gcc_regs) {
-+		gcc_regs = ml_io_map(0x01400000u, 0x50000u);
-+	}
-+	if (!gcc_regs) {
-+		printf("SWEET UFS: failed to map GCC\n");
-+		return;
-+	}
-+
-+	uint32_t ahb_cbcr = *(volatile uint32_t *)(gcc_regs + 0x16008u);
-+	uint32_t apps_cbcr = *(volatile uint32_t *)(gcc_regs + 0x4a010u);
-+	uint32_t rcgr_cmd = *(volatile uint32_t *)(gcc_regs + 0x26028u);
-+	uint32_t rcgr_cfg = *(volatile uint32_t *)(gcc_regs + 0x2602cu);
-+	printf("SWEET UFS: GCC: ahb=%#x apps=%#x (halt=%u en=%u) rcgr_cmd=%#x cfg=%#x\n",
-+	       ahb_cbcr, apps_cbcr, (apps_cbcr >> 31) & 1, apps_cbcr & 1, rcgr_cmd, rcgr_cfg);
-+
-+	/* Enable SDCC1 AHB clock if not enabled */
-+	if (!(ahb_cbcr & 1u)) {
-+		*(volatile uint32_t *)(gcc_regs + 0x16008u) = ahb_cbcr | 1u;
++	/* Clear CORE_CLK_PWRSAVE (bit 1) in Qualcomm CORE_VENDOR_SPEC (offset 0x20c) */
++	if (su.reg_size >= 0x300u) {
++		uint32_t vspec = ufs_rd(0x20cu);
++		vspec &= ~(1u << 1); /* clear CORE_CLK_PWRSAVE */
++		ufs_wr(0x20cu, vspec);
 +	}
 +
-+	/* Enable SDCC1 APPS branch clock if halted or not enabled */
-+	if (!(apps_cbcr & 1u) || (apps_cbcr & (1u << 31))) {
-+		*(volatile uint32_t *)(gcc_regs + 0x4a010u) = (apps_cbcr | 1u);
++	/* Check core_mem (su.regs + 0x1000): CORE_HC_MODE (0x1078) */
++	if (su.reg_size >= 0x2000u) {
++		uint32_t hc_mode = ufs_rd(0x1078u);
++		if (!(hc_mode & 1u)) {
++			ufs_wr(0x1078u, hc_mode | 1u); /* HC_MODE_EN */
++		}
++	}
++
++	/* Enable SDHCI Card Clock (SDHCI_CLOCK_CARD_EN = 0x0004) via 32-bit dword access */
++	uint32_t clk_reg = ufs_rd(SDHCI_CLOCK_CONTROL);
++	if (!(clk_reg & 0x0001u)) {
++		clk_reg |= 0x0001u;
++		ufs_wr(SDHCI_CLOCK_CONTROL, clk_reg);
 +		for (unsigned i = 0; i < 10000; i++) {
-+			if (!(*(volatile uint32_t *)(gcc_regs + 0x4a010u) & (1u << 31))) {
++			if (ufs_rd(SDHCI_CLOCK_CONTROL) & 0x0002u) {
 +				break;
 +			}
 +			delay(10);
 +		}
-+		printf("SWEET UFS: GCC: apps cbcr after enable: %#x (halt=%u en=%u)\n",
-+		       *(volatile uint32_t *)(gcc_regs + 0x4a010u),
-+		       (*(volatile uint32_t *)(gcc_regs + 0x4a010u) >> 31) & 1,
-+		       *(volatile uint32_t *)(gcc_regs + 0x4a010u) & 1);
 +	}
-+}
-+
-+static void
-+sdhci_enable_card_clock(void)
-+{
-+	gcc_init_sdcc1();
-+
-+	/* Clear CORE_CLK_PWRSAVE (bit 1) in Qualcomm CORE_VENDOR_SPEC (offset 0x20c) */
-+	if (su.reg_size >= 0x300u) {
-+		uint32_t vspec = *(volatile uint32_t *)(su.regs + 0x20cu);
-+		vspec &= ~(1u << 1); /* clear CORE_CLK_PWRSAVE */
-+		*(volatile uint32_t *)(su.regs + 0x20cu) = vspec;
-+	}
-+
-+	/* Check core_mem (su.regs + 0x1000): CORE_POWER (0x0) and CORE_HC_MODE (0x78) */
-+	if (su.reg_size >= 0x2000u) {
-+		uint32_t pwr = *(volatile uint32_t *)(su.regs + 0x1000u);
-+		uint32_t hc_mode = *(volatile uint32_t *)(su.regs + 0x1078u);
-+		if (!(hc_mode & 1u)) {
-+			*(volatile uint32_t *)(su.regs + 0x1078u) = hc_mode | 1u; /* HC_MODE_EN */
-+		}
-+		printf("SWEET UFS: core_mem: pwr=%#x hc_mode=%#x -> %#x\n",
-+		       pwr, hc_mode, *(volatile uint32_t *)(su.regs + 0x1078u));
-+	}
-+
-+	/* Configure SDHCI Clock with safe divider (N = 4, divisor = 8) */
-+	uint16_t cur_clk = *(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL);
-+	/* Stop clock */
-+	*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = cur_clk & ~0x0005u;
-+	delay(100);
-+
-+	/* Set divider N = 4 and enable internal clock */
-+	uint16_t new_clk = (4u << 8) | 0x0001u;
-+	*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = new_clk;
-+	for (unsigned i = 0; i < 10000; i++) {
-+		if (*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) & 0x0002u) {
-+			break;
-+		}
-+		delay(10);
-+	}
-+
-+	/* Enable card clock */
-+	new_clk = *(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) | 0x0004u;
-+	*(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL) = new_clk;
++	clk_reg = ufs_rd(SDHCI_CLOCK_CONTROL);
++	clk_reg |= 0x0004u; /* SDHCI_CLOCK_CARD_EN */
++	ufs_wr(SDHCI_CLOCK_CONTROL, clk_reg);
 +	__builtin_arm_dsb(0xf);
 +	delay(2000);
 +}
 +
- static void
++static void
  sdhci_reset_lines(uint8_t mask)
  {
- 	*(volatile uint8_t *)(su.regs + SDHCI_SOFTWARE_RESET) = mask;
+-	*(volatile uint8_t *)(su.regs + SDHCI_SOFTWARE_RESET) = mask;
++	/* SDHCI_SOFTWARE_RESET is byte 3 of SDHCI_CLOCK_CONTROL (offset 0x2C).
++	 * Read-modify-write via aligned 32-bit dword. */
++	uint32_t reg = ufs_rd(SDHCI_CLOCK_CONTROL);
++	reg |= ((uint32_t)mask << 24);
++	ufs_wr(SDHCI_CLOCK_CONTROL, reg);
  	for (unsigned i = 0; i < 10000; i++) {
--		if (!(ufs_rd(SDHCI_CLOCK_CONTROL) & ((uint32_t)mask << 24))) {
-+		if (!(*(volatile uint8_t *)(su.regs + SDHCI_SOFTWARE_RESET) & mask)) {
+ 		if (!(ufs_rd(SDHCI_CLOCK_CONTROL) & ((uint32_t)mask << 24))) {
  			break;
  		}
  		delay(1);
@@ -121,10 +74,9 @@ Subject: [PATCH 958/958] willow: enable gcc sdcc1 clocks, core_mem hc_mode, sdhc
 +	}
 +	ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
 +	ufs_wr(SDHCI_ARGUMENT, arg);
-+	uint16_t cmd = (uint16_t)((cmd_idx << 8) | flags);
-+	*(volatile uint16_t *)(su.regs + SDHCI_TRANSFER_MODE) = 0;
-+	__builtin_arm_dsb(0xf);
-+	*(volatile uint16_t *)(su.regs + 0x0eu) = cmd;
++	uint32_t cmd = (uint32_t)((cmd_idx << 8) | flags);
++	/* Aligned 32-bit dword write at 0x0C: transfer_mode=0 (bits 15:0), command=cmd (bits 31:16) */
++	ufs_wr(SDHCI_TRANSFER_MODE, cmd << 16);
 +	__builtin_arm_dsb(0xf);
 +
 +	wait_us = 0;
@@ -160,7 +112,7 @@ Subject: [PATCH 958/958] willow: enable gcc sdcc1 clocks, core_mem hc_mode, sdhc
  }
  
  static int
-@@ -308,35 +448,40 @@
+@@ -308,35 +401,39 @@
  	uint32_t *p = (uint32_t *)buf;
  
  	while (cnt > 0) {
@@ -177,22 +129,24 @@ Subject: [PATCH 958/958] willow: enable gcc sdcc1 clocks, core_mem hc_mode, sdhc
  		}
  		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
 -		ufs_wr(SDHCI_BLOCK_SIZE, 512u | ((chunk & 0xffffu) << 16));
-+		*(volatile uint16_t *)(su.regs + SDHCI_BLOCK_SIZE) = 512u;
-+		*(volatile uint16_t *)(su.regs + 0x06u) = 1u;
++		/* Aligned 32-bit dword write at 0x04: block_size=512 (bits 15:0), block_count=1 (bits 31:16) */
++		ufs_wr(SDHCI_BLOCK_SIZE, 512u | (1u << 16));
  		ufs_wr(SDHCI_ARGUMENT, sector);
  
- 		uint16_t mode = SDHCI_TRNS_BLK_CNT_EN | (write ? 0u : SDHCI_TRNS_READ);
- 		uint16_t cmd_idx = write ? 24u : 17u;
+-		uint16_t mode = SDHCI_TRNS_BLK_CNT_EN | (write ? 0u : SDHCI_TRNS_READ);
+-		uint16_t cmd_idx = write ? 24u : 17u;
 -		if (chunk > 1) {
 -			mode |= SDHCI_TRNS_MULTI | SDHCI_TRNS_AUTO_CMD12;
 -			cmd_idx = write ? 25u : 18u;
 -		}
- 		uint16_t cmd = (uint16_t)((cmd_idx << 8) | 0x3au);
+-		uint16_t cmd = (uint16_t)((cmd_idx << 8) | 0x3au);
 -		ufs_wr(SDHCI_TRANSFER_MODE, (uint32_t)mode | ((uint32_t)cmd << 16));
++		uint32_t mode = SDHCI_TRNS_BLK_CNT_EN | (write ? 0u : SDHCI_TRNS_READ);
++		uint32_t cmd_idx = write ? 24u : 17u;
++		uint32_t cmd = ((cmd_idx << 8) | 0x3au);
 +
-+		*(volatile uint16_t *)(su.regs + SDHCI_TRANSFER_MODE) = mode;
-+		__builtin_arm_dsb(0xf);
-+		*(volatile uint16_t *)(su.regs + 0x0eu) = cmd;
++		/* Aligned 32-bit dword write at 0x0C: transfer_mode (bits 15:0), command (bits 31:16) */
++		ufs_wr(SDHCI_TRANSFER_MODE, mode | (cmd << 16));
 +		__builtin_arm_dsb(0xf);
  
  		wait_us = 0;
@@ -209,7 +163,7 @@ Subject: [PATCH 958/958] willow: enable gcc sdcc1 clocks, core_mem hc_mode, sdhc
  				sdhci_reset_lines(0x06);
  				return ETIMEDOUT;
  			}
-@@ -346,39 +491,43 @@
+@@ -346,39 +443,43 @@
  
  		uint32_t pmask = write ? SDHCI_SPACE_AVAILABLE : SDHCI_DATA_AVAILABLE;
  		uint32_t imask = write ? SDHCI_INT_SPACE_AVAIL : SDHCI_INT_DATA_AVAIL;
@@ -277,20 +231,37 @@ Subject: [PATCH 958/958] willow: enable gcc sdcc1 clocks, core_mem hc_mode, sdhc
  				break;
  			}
  			delay(1);
-@@ -672,6 +821,35 @@
- 		*(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL) = hctrl & ~0x18u;
- 		uint16_t hc2 = *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2);
- 		*(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2) = hc2 & ~(1u << 12);
+@@ -660,18 +761,46 @@
+ {
+ 	if (su.sdhci) {
+ 		if (su.reg_size >= 0x2000u) {
+-			uint32_t cqcfg = *(volatile uint32_t *)(su.regs + 0x1008u);
++			uint32_t cqcfg = ufs_rd(0x1008u);
+ 			if (cqcfg & 1u) {
+-				*(volatile uint32_t *)(su.regs + 0x1008u) = cqcfg & ~1u;
++				ufs_wr(0x1008u, cqcfg & ~1u);
+ 			}
+ 		}
+ 		ufs_wr(SDHCI_SIGNAL_ENABLE, 0);
+ 		ufs_wr(SDHCI_INT_ENABLE, 0x03ff00fbu);
+ 		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
+-		uint8_t hctrl = *(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL);
+-		*(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL) = hctrl & ~0x18u;
+-		uint16_t hc2 = *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2);
+-		*(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2) = hc2 & ~(1u << 12);
++		uint32_t hctrl32 = ufs_rd(SDHCI_HOST_CONTROL);
++		ufs_wr(SDHCI_HOST_CONTROL, hctrl32 & ~0x00000018u);
++		uint32_t hc2_32 = ufs_rd(0x3cu);
++		ufs_wr(0x3cu, hc2_32 & ~(1u << (12 + 16)));
 +
 +		sdhci_enable_card_clock();
 +
-+		printf("SWEET UFS: init: hctrl=%#x hc2=%#x clk=%#x pstate=%#x vspec=%#x cqcfg=%#x\n",
-+		       *(volatile uint8_t *)(su.regs + SDHCI_HOST_CONTROL),
-+		       *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2),
-+		       *(volatile uint16_t *)(su.regs + SDHCI_CLOCK_CONTROL),
++		printf("SWEET UFS: init: hctrl=%#x clk=%#x pstate=%#x vspec=%#x hc_mode=%#x\n",
++		       ufs_rd(SDHCI_HOST_CONTROL) & 0xffu,
++		       ufs_rd(SDHCI_CLOCK_CONTROL) & 0xffffu,
 +		       ufs_rd(SDHCI_PRESENT_STATE),
-+		       (su.reg_size >= 0x300u) ? *(volatile uint32_t *)(su.regs + 0x20cu) : 0,
-+		       (su.reg_size >= 0x2000u) ? *(volatile uint32_t *)(su.regs + 0x1008u) : 0);
++		       (su.reg_size >= 0x300u) ? ufs_rd(0x20cu) : 0,
++		       (su.reg_size >= 0x2000u) ? ufs_rd(0x1078u) : 0);
 +
 +		uint32_t card_status = 0;
 +		if (sdhci_cmd_simple(13, 1u << 16, 0x1au, &card_status) == 0) {

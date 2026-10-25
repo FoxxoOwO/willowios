@@ -230,12 +230,15 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - `SWEET UFS: willow SDHCI eMMC host ready (pstate=0x1f800f0)`!
   - `panic: IOFindBSDRoot: SWEET UFS root ufsroot0 unavailable: 60 @IOKitBSDInit.cpp:778` (60 = `ETIMEDOUT`)
 - **Action**:
-  - Observed from photo `media_1792912064518_321afbef.jpg`:
-    - `SWEET UFS: init: hctrl=0 hc2=0 clk=0x7 pstate=0x1f800f0 vspec=0x300a0c cqcfg=0`
-    - SD card clock was enabled (`clk=0x7`), and `CORE_CLK_PWRSAVE` was cleared (`vspec=0x300a0c`).
-    - However, commands (`CMD13`, `CMD16`, `CMD17`) still timed out with `is=0 pstate=0x1f800f1` (no hardware interrupt / timeout occurred), indicating the core clock generator or root clock is not ticking the SDHCI command state machine or divider was too fast.
+  - Observed from photo `media_1792913405684_2248e6a5.jpg`:
+    - Screen stopped at `bsd_init: calling setconf`: physical IO mapping of `0x01400000` (GCC) caused a synchronous abort because Qualcomm TrustZone restricts direct non-secure access to GCC clock controller registers on SM6125.
+    - Also discovered crucial hardware bus constraint: Qualcomm Snapdragon SM6125 peripheral interconnect bus (AHB/AXI) strictly enforces **32-bit DWORD aligned accesses** (`ufs_rd`/`ufs_wr`). 16-bit halfword stores (`*(volatile uint16_t *)`) drop byte strobes or are ignored by the bus fabric, explaining why previous 16-bit command stores resulted in no command dispatch.
   - Updated patch `0958-willow-sdhci-diag.patch`:
-    - Maps Qualcomm GCC at `0x01400000` to inspect and enable `GCC_SDCC1_AHB_CLK` (`0x16008`) and `GCC_SDCC1_APPS_CLK` (`0x4a010`).
-    - Configures `core_mem` at `0x04745000`: verifies `CORE_POWER` (`0x0`) and sets `CORE_HC_MODE` (`0x78`, `HC_MODE_EN` = 1).
-    - Programs SDHCI clock control with standard stop-and-switch sequence using safe divider `N = 4` (divisor 8 = ~25 MHz / 12.5 MHz).
-    - Maintains single sector transfers, card state query (`CMD13`), card select (`CMD7`), block size 512 (`CMD16`), and diagnostic logging.
+    - Removed unsafe GCC physical memory mapping.
+    - Converted ALL register reads and writes in `sweet_ufs.c` to strictly 32-bit DWORD accesses:
+      - `SDHCI_TRANSFER_MODE` (0x0C): 32-bit dword containing both Transfer Mode (bits 15:0) and Command (bits 31:16).
+      - `SDHCI_BLOCK_SIZE` (0x04): 32-bit dword containing both Block Size (bits 15:0) and Block Count (bits 31:16).
+      - `SDHCI_CLOCK_CONTROL` (0x2C): 32-bit read-modify-write enabling `SDHCI_CLOCK_CARD_EN` (0x4).
+      - Software line resets performed via 32-bit dword read-modify-write on offset 0x2C byte 3.
+      - Sets `HC_MODE_EN` (bit 0) in `core_mem` (`0x04745078`).
+      - Tests card state (`CMD13`), selects card (`CMD7`), sets block size 512 (`CMD16`), and reads sector 0 (`CMD17`) using single-sector 32-bit dword transfers.
