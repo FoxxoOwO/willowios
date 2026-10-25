@@ -290,7 +290,26 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - Downloaded updated `kernel.development.sweet` (18,052,352 bytes).
   - Regenerated `xnu/out/payload.bin` with complete boot-args.
   - Repacked [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img) (17,756,160 bytes).
-- Next Action: Put phone into Fastboot mode (Hold Volume Down + Power), flash updated `boot` and reboot to verify shared region mapping and dyld shared cache load!
+## HISTORIC MILESTONE (2026-10-25, OBSERVED AND PHOTOGRAPHED): FULL iOS 16 USERLAND BOOTED ON WILLOW!
+- User flashed updated `shim/out/shim-evox-boot.img` with patch 0959.
+- Verified from 5 hardware photos (`media_1792942671748_34f38eac.jpg`..`media_1792942681136_0ad3c494.jpg`):
+  - **Shared Cache Mapped**: dyld shared cache loaded, `libSystem.B.dylib` mapped, all 43 split shared cache slices mapped into userland.
+  - **System Daemons Executing**:
+    - `launchd`: "Early boot complete. Continuing system boot."
+    - `notifyd`, `userinit`, `blueflood`, `fairplayd_H2`, `AMFI_PST_Loader`
+    - `fseventsd`, `watchdogd`, `lockdownd`
+    - `backboardd`: Window server & event dispatch daemon initialized!
+    - `SpringBoard` (PID 26): Main iOS Home Screen GUI process active!
+    - `driverkitd`, `AppleCredentialManagerDaemon`, `dumpd`, `tangent`, `thermalmonitord`, `timed`, `sharingd`, `containermanagerd`, `distnoted`, `locationd`, `wifid`, `configd`, `mediaserverd`, `ptpd`, `chronod`, `passd`, `apsd`, `cfprefsd`, `corespeechd`, `securityd`, `mobileassetd`, `nehelper`, `bluetoothd`, `nsurlsessiond`, `liveactivitiesd`, `coreduetd`, `CloudKeychainProxy`, `ReportCrash`, `triald`, `biomed`, `assistantd`, `contextstored`, `ManagedSettingsAgent`, `apfs_iosd`, `ACCHWComponentAuthService`.
+  - **Hardware Interaction**:
+    - `SWEET TOUCH`: `SweetHIDTouch` opened by `IOHIDEventServiceUserClient` (`backboardd`) — touch input routed directly to iOS!
+    - `SWEET HID`: `SweetHIDButtons` opened by `backboardd` — volume and power buttons active!
+    - `SWEET AKS`: AppleKeyStore serving cryptographic tokens for all system daemons!
+    - `SWEET INTF1`: continuous splash 60 FPS scanout active (`302 frames in 5 s`).
+    - `SMP`: Process sampler tracing backtraces of `SpringBoard` and `backboardd` threads running normally in `CFRunLoopRun()`.
+- Display Transition Options:
+  - Adding `sweetfb_noconsole=1` and `sweetfb_stayon=1` to cmdline stops kernel printk console from overwriting the framebuffer once the GUI renders.
+
 
 
 
