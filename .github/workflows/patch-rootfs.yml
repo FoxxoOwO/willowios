@@ -60,7 +60,9 @@ jobs:
       - name: Decompress sparse image
         run: |
           tar -xzf artifact/iOSRoot.simg.tar.gz
+          rm -f artifact/iOSRoot.simg.tar.gz
           ls -lh iOSRoot.simg
+          df -h .
 
       - name: Convert sparse -> raw
         run: |
@@ -101,7 +103,10 @@ jobs:
                   written += nbytes
               print(f'wrote {written} bytes -> {dst}')
           PY
+          # Free the sparse image now that we have raw
+          rm -f iOSRoot.simg
           ls -lh iOSRoot.raw
+          df -h .
 
       - name: fsck HFS+
         run: |
@@ -137,8 +142,9 @@ jobs:
       - name: Convert raw -> sparse
         run: |
           python3 tools/img2simg.py iOSRoot.raw iOSRoot-patched.simg
+          rm -f iOSRoot.raw
           ls -lh iOSRoot-patched.simg
-          rm iOSRoot.raw
+          df -h .
 
       - name: Compress patched sparse image
         run: |
