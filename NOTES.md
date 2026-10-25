@@ -326,3 +326,8 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
 
 
 
+
+## 2026-10-25 17:50: console still drawn over GUI; patch 0960 diagnostic
+- Photos show iOS userland running (SpringBoard, backboardd SwapBegin/SwapEnd = 0x0, 60 FPS) but the screen shows only kernel console text, even with sweetfb_noconsole=1 (user: "jenom text"). No "SWEET FB: swap N layer" line seen, so present() probably has not run yet (observation), cause unknown.
+- Patch 0960 (CI run 40213343363, success): mute console at first SwapEnd, log first 8 present() calls (mask/consShown/paused/muted).
+- tools/fetch_kernel.py RUN_ID downloads the xnu-kernel artifact. shim/out/shim-evox-boot.img repacked (same cmdline). NEXT: flash, photograph the lines "first SwapEnd, console muted=" and "present #"; if screen freezes/black pull the persistent log (tools/sweet-log-pull.sh via recovery).
