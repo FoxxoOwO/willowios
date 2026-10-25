@@ -1,0 +1,149 @@
+name: patch-rootfs
+
+# Apply sweet-root-tweaks.py to an existing iOSRoot sparse image.
+# Downloads the last successful iOSRoot-sparse-image artifact from the
+# rootfs workflow, mounts the HFS+ image on macOS, runs the tweaks script,
+# and uploads a new patched sparse image as an artifact.
+#
+# Trigger manually via workflow_dispatch; the rootfs_run_id input lets you
+# target a specific rootfs run (leave blank to use the latest successful one).
+
+on:
+  workflow_dispatch:
+    inputs:
+      rootfs_run_id:
+        description: >
+          GitHub Actions run ID of the rootfs workflow to pull iOSRoot from.
+          Leave blank to use the latest successful rootfs run.
+        default: ""
+
+jobs:
+  patch:
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve rootfs run ID
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ github.event.inputs.rootfs_run_id }}" ]; then
+            RUN_ID="${{ github.event.inputs.rootfs_run_id }}"
+          else
+            RUN_ID=$(gh run list \
+              --workflow rootfs.yml \
+              --branch main \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Using rootfs run ID: $RUN_ID"
+
+      - name: Download iOSRoot sparse image artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ steps.resolve.outputs.run_id }}" \
+            --name iOSRoot-sparse-image \
+            --dir artifact/
+          ls -lh artifact/
+
+      - name: Decompress sparse image
+        run: |
+          tar -xzf artifact/iOSRoot.simg.tar.gz
+          ls -lh iOSRoot.simg
+
+      - name: Convert sparse -> raw
+        run: |
+          # macOS does not ship simg2img; use tools/img2simg.py in reverse,
+          # or just use the Python simg reader bundled in the repo.
+          python3 - <<'PY'
+          import struct, sys, os
+
+          MAGIC = 0xed26ff3a
+          RAW, DONT_CARE, FILL = 0xcac1, 0xcac3, 0xcac2
+
+          src = 'iOSRoot.simg'
+          dst = 'iOSRoot.raw'
+
+          with open(src, 'rb') as f, open(dst, 'wb') as o:
+              hdr = f.read(28)
+              magic, major, minor, fhsz, chsz, blksz, total_blks, total_chunks, _ = \
+                  struct.unpack('<IHHHHIIIi', hdr)
+              assert magic == MAGIC, f'not sparse: 0x{magic:08x}'
+              print(f'sparse: {total_blks} blocks x {blksz} B = {total_blks*blksz//1<<30} GiB, {total_chunks} chunks')
+              # seek to end of file header
+              f.seek(fhsz)
+              written = 0
+              for _ in range(total_chunks):
+                  ctype, _, nblks, tsz = struct.unpack('<HHII', f.read(chsz))
+                  nbytes = nblks * blksz
+                  if ctype == RAW:
+                      data = f.read(tsz - chsz)
+                      o.write(data)
+                  elif ctype == FILL:
+                      word = f.read(4)
+                      o.write(word * (nbytes // 4))
+                  elif ctype == DONT_CARE:
+                      o.write(b'\x00' * nbytes)
+                  else:
+                      f.read(tsz - chsz)
+                      o.write(b'\x00' * nbytes)
+                  written += nbytes
+              print(f'wrote {written} bytes -> {dst}')
+          PY
+          ls -lh iOSRoot.raw
+
+      - name: fsck HFS+
+        run: |
+          # macOS fsck_hfs can repair the volume before mounting
+          fsck_hfs -fy iOSRoot.raw || true
+
+      - name: Mount HFS+ image
+        run: |
+          MNT="$HOME/iosroot_mnt"
+          mkdir -p "$MNT"
+          hdiutil attach -imagekey diskimage-class=CRawDiskImage \
+            -nomount -readwrite iOSRoot.raw > /tmp/hdiutil.out
+          cat /tmp/hdiutil.out
+          DEVNODE=$(awk '/Apple_HFS/{print $1}' /tmp/hdiutil.out | head -1)
+          # Fallback: first entry
+          [ -n "$DEVNODE" ] || DEVNODE=$(awk 'NR==1{print $1}' /tmp/hdiutil.out)
+          echo "DEVNODE=$DEVNODE" >> "$GITHUB_ENV"
+          echo "MNT=$MNT" >> "$GITHUB_ENV"
+          mount -t hfs -o rw "$DEVNODE" "$MNT"
+          echo "Mounted $DEVNODE at $MNT"
+          ls "$MNT"
+
+      - name: Apply sweet-root-tweaks.py
+        run: |
+          sudo python3 tools/sweet-root-tweaks.py "$MNT"
+
+      - name: Unmount
+        if: always()
+        run: |
+          sync
+          hdiutil detach "$DEVNODE" || true
+
+      - name: Convert raw -> sparse
+        run: |
+          python3 tools/img2simg.py iOSRoot.raw iOSRoot-patched.simg
+          ls -lh iOSRoot-patched.simg
+          rm iOSRoot.raw
+
+      - name: Compress patched sparse image
+        run: |
+          tar -czf iOSRoot-patched.simg.tar.gz iOSRoot-patched.simg
+          ls -lh iOSRoot-patched.simg.tar.gz
+
+      - name: Upload patched artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOSRoot-patched
+          path: iOSRoot-patched.simg.tar.gz
+          retention-days: 7

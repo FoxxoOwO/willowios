@@ -26,6 +26,13 @@ screen (image versions v8-v14 in NOTES.md):
   activation      mobileactivationd data ark seeded; the actual Activated state
                   comes from its Hactivation branch, selected by the /chosen
                   security-status properties in tools/mkadt.py
+  crashloops      mobileactivationd, dasd, syncdefaultsd disabled in
+                  launchd.plist (Disabled=true): they crash-loop on every boot
+                  because there is no Apple server connectivity and no
+                  activation certificate. mobileactivationd fires SIGTRAP
+                  immediately (activation assert), dasd and syncdefaultsd
+                  SIGABRT (XPC timeout). All three spin at 100% CPU and fill
+                  the kernel log, blocking SpringBoard from drawing.
 """
 import glob, os, plistlib, shutil, sys
 
@@ -107,6 +114,35 @@ def activation(root):
     print('data ark', d)
 
 
+# Daemons that crash-loop on every boot without Apple server connectivity:
+#   mobileactivationd  SIGTRAP on activation assert (no cert / no network)
+#   dasd               SIGABRT XPC timeout (depends on Apple push infra)
+#   syncdefaultsd      SIGABRT XPC timeout (iCloud sync, unreachable)
+# Each crash wastes CPU and fills the kernel log with CRASH lines, which delays
+# SpringBoard's first draw.  Disabled=true prevents launchd from ever starting
+# them; the data_ark.plist written by activation() keeps mobileactivationd's
+# on-disk state marked Activated so nothing else trips over a missing state.
+CRASHLOOP_LABELS = {
+    'com.apple.mobileactivationd',
+    'com.apple.dasd',
+    'com.apple.syncdefaultsd',
+}
+
+
+def disable_crashloops(root):
+    path = os.path.join(root, 'System/Library/xpc/launchd.plist')
+    st = os.stat(path)
+    plist = load(path)
+    jobs = plist['LaunchDaemons']
+    disabled = 0
+    for job in jobs.values():
+        if job.get('Label') in CRASHLOOP_LABELS:
+            job['Disabled'] = True
+            disabled += 1
+    save(path, plist, st.st_uid, st.st_gid, st.st_mode & 0o7777)
+    print(f'disable_crashloops: Disabled=true on {disabled} job(s): {sorted(CRASHLOOP_LABELS)}')
+
+
 def audio(root):
     src = os.path.join(root, 'Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin')
     dst_dir = os.path.join(root, 'Library/Audio/Plug-Ins/HAL.disabled')
@@ -129,6 +165,7 @@ def main():
     launchd(root)
     containers(root)
     activation(root)
+    disable_crashloops(root)
     audio(root)
     merge_pref(root, 'com.apple.migration', {
         'LastSystemVersion': BUILD,
