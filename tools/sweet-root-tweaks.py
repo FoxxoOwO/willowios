@@ -114,18 +114,26 @@ def activation(root):
     print('data ark', d)
 
 
-# Daemons that crash-loop on every boot without Apple server connectivity:
-#   mobileactivationd  SIGTRAP on activation assert (no cert / no network)
-#   dasd               SIGABRT XPC timeout (depends on Apple push infra)
-#   syncdefaultsd      SIGABRT XPC timeout (iCloud sync, unreachable)
-# Each crash wastes CPU and fills the kernel log with CRASH lines, which delays
-# SpringBoard's first draw.  Disabled=true prevents launchd from ever starting
-# them; the data_ark.plist written by activation() keeps mobileactivationd's
-# on-disk state marked Activated so nothing else trips over a missing state.
-CRASHLOOP_LABELS = {
-    'com.apple.mobileactivationd',
+# Daemons that crash-loop on every boot without Apple server connectivity.
+# Strategy:
+#   CRASHLOOP_DISABLE  — truly useless, never queried by SpringBoard/lsd, kill them
+#   CRASHLOOP_THROTTLE — lsd/SpringBoard needs to talk to these at least once before
+#                        they crash; give them 5 min between restarts so the first
+#                        query succeeds before the next crash
+#
+# Root cause (boot log analysis):
+#   mobileactivationd SIGTRAP (activation assert) but lsd queries it for device trust
+#     BEFORE the crash; disabling it entirely breaks lsd's AMFI trust check, which
+#     prevents SpringBoard from rendering its first frame.
+#   dasd / syncdefaultsd SIGABRT XPC timeout — not queried by lsd/SpringBoard
+#   fairplayd.H2 crash-loops 30+ times per boot (DRM cert check fails offline)
+CRASHLOOP_DISABLE = {
     'com.apple.dasd',
     'com.apple.syncdefaultsd',
+    'com.apple.fairplayd.H2',
+}
+CRASHLOOP_THROTTLE = {
+    'com.apple.mobileactivationd': 300,   # lsd needs one response before crash
 }
 
 
@@ -135,12 +143,19 @@ def disable_crashloops(root):
     plist = load(path)
     jobs = plist['LaunchDaemons']
     disabled = 0
+    throttled = 0
     for job in jobs.values():
-        if job.get('Label') in CRASHLOOP_LABELS:
+        label = job.get('Label', '')
+        if label in CRASHLOOP_DISABLE:
             job['Disabled'] = True
             disabled += 1
+        elif label in CRASHLOOP_THROTTLE:
+            job['ThrottleInterval'] = CRASHLOOP_THROTTLE[label]
+            job.pop('Disabled', None)   # undo any previous Disabled=true
+            throttled += 1
     save(path, plist, st.st_uid, st.st_gid, st.st_mode & 0o7777)
-    print(f'disable_crashloops: Disabled=true on {disabled} job(s): {sorted(CRASHLOOP_LABELS)}')
+    print(f'disable_crashloops: Disabled={disabled} {sorted(CRASHLOOP_DISABLE)}, '
+          f'ThrottleInterval on {throttled} {sorted(CRASHLOOP_THROTTLE)}')
 
 
 def audio(root):
