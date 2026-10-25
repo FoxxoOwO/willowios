@@ -1,0 +1,43 @@
+Subject: [PATCH 957/957] willow: keep console direct on boot framebuffer without shadow retarget
+
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -418,19 +418,26 @@
+ 		    fBootSrc, fBootStride);
+ 		sweet_scanout_set_geometry(fWidth, fHeight, fLogicalW, fLogicalH);
+ 		vm_size_t fsz = (vm_size_t)fRowBytes * fHeight;
+-		for (int i = 0; i < 2; i++) {
+-			fFlip[i] = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
++		uint32_t shadow = 0;
++		PE_parse_boot_argn("sweetfb_shadow", &shadow, sizeof(shadow));
++		if (shadow != 0) {
++			for (int i = 0; i < 2; i++) {
++				fFlip[i] = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
++				    kIODirectionInOut | kIOMemoryPhysicallyContiguous, fsz, 0x00000000fffff000ull);
++				fFlipPhys[i] = fFlip[i] ? fFlip[i]->getPhysicalSegment(0, NULL, kIOMemoryMapperNone) : 0;
++			}
++			fFadeOrig = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut, fsz, page_size);
++			fCons = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+ 			    kIODirectionInOut | kIOMemoryPhysicallyContiguous, fsz, 0x00000000fffff000ull);
+-			fFlipPhys[i] = fFlip[i] ? fFlip[i]->getPhysicalSegment(0, NULL, kIOMemoryMapperNone) : 0;
+-		}
+-		fFadeOrig = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut, fsz, page_size);
+-		fCons = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+-		    kIODirectionInOut | kIOMemoryPhysicallyContiguous, fsz, 0x00000000fffff000ull);
+-		if (fFlip[0] == NULL || fFlip[1] == NULL || fFadeOrig == NULL) {
+-			OSSafeReleaseNULL(fFlip[0]);
+-			OSSafeReleaseNULL(fFlip[1]);
+-			OSSafeReleaseNULL(fFadeOrig);
+-			OSSafeReleaseNULL(fCons);
++			if (fFlip[0] == NULL || fFlip[1] == NULL || fFadeOrig == NULL) {
++				OSSafeReleaseNULL(fFlip[0]);
++				OSSafeReleaseNULL(fFlip[1]);
++				OSSafeReleaseNULL(fFadeOrig);
++				OSSafeReleaseNULL(fCons);
++			}
++		} else {
++			fFlip[0] = fFlip[1] = fFadeOrig = fCons = NULL;
++			IOLog("SWEET FB: console stays direct on boot framebuffer (no shadow)\n");
+ 		}
+ 		if (fCons != NULL) {
+ 			uint8_t *c = (uint8_t *)fCons->getBytesNoCopy();

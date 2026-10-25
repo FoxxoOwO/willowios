@@ -191,15 +191,24 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - Regenerated `xnu/out/payload.bin` and packed [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img).
 - Next action: Put phone in fastboot mode (Vol Down + Power), flash [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img), and observe the unsuppressed kernel bootstrap sequence.
 
-## MILESTONE (2026-10-25, OBSERVED AND PHOTOGRAPHED): BSD SUBSYSTEM REACHED!
-- Real Apple XNU Kernel on Willow (`kernel.development.sweet`) booted all the way through Mach and IOKit into BSD!
-- Display verified with `-enable_kprintf_spam`:
-  - Phase 16 (`STARTUP_SUB_EARLY_BOOT`) complete
-  - HMAC-SHA256, libpthread-514.100.2, XML entitlements AMFI, vnguard guarded vnode policy all loaded
-  - IOKit platform expert registered
-  - Gold CPU 0 entered `initCPU mpidr=0x100 EL1 IRQs=1`, `came alive; SGI1 OK`
-  - `AppleMobileFileIntegrity` service published
-  - BSD initialization reached: printed official Berkeley copyright banner:
-    `Copyright (c) 1982, 1986, 1989, 1991, 1993\n  The Regents of the University of California. All rights reserved.`
-  - Cursor resting right at BSD init phase (between copyright and `mac_policy_initbsd`).
-- Added patch `0956-willow-bsdinit-debug.patch` to enable `DEBUG_BSDINIT` with visible `printf` checkpoints to pinpoint the exact instruction executing next.
+## MILESTONE (2026-10-25, OBSERVED AND PHOTOGRAPHED): BSD SUBSYSTEM REACHED & ROOT CAUSE OF FROZEN SCREEN!
+- Real Apple XNU Kernel on Willow (`kernel.development.sweet`) booted all the way through Mach, BSD, and IOKit into `IOKitInitializeTime()`!
+- Verified from photo `media_1792908194021_399db4bb.jpg`:
+  - `bsd_init: [8] current_uthread` -> `[8.1] current_uthread done`
+  - `bsd_init: [9] calling mac_policy_initbsd` -> `MAC Framework successfully initialized` -> `[9.1] mac_policy_initbsd done`
+  - `bsd_init: calling kauth_cred_create`
+  - `bsd_init: calling chgproccnt`
+  - `bsd_init: calling kmem_suballoc`
+  - `bsd_init: calling bsd_bufferinit` -> `using 3883 buffer headers and 3883 cluster IO buffer headers`
+  - `bsd_init: calling IOKitInitializeTime`
+  - `SWEET CPU: 1/1 CPUs initialized, SGI1 verified`
+  - `SWEET FB: DSI0 ctrl 0x1f7, brightness via DCS 0x51`
+  - `SWEET FB: empty IOAcceleratorES published (no 30 s wait in CAMetalContextCreate)`
+  - `SWEET INTF1: te_en 0x1 config 0x80800000 hsync 0x50c0002 vsync_period 0x2e8bac ...`
+  - `SWEET FB: MDP VIGO src 0x5c000000 stride 4320 (boot), direct scanout ready`
+- **Root Cause of Screen Freeze**:
+  - Right after printing `SWEET FB: MDP VIG0 ... direct scanout ready`, `SweetFramebuffer.cpp` allocates a shadow frame `fCons` and calls `sweet_console_retarget((vm_offset_t)c)`.
+  - This redirected `video_console` (`vinfo.v_baseaddr`) from the physical boot framebuffer `0x5c000000` to DRAM buffer `c`.
+  - Because Trinket / continuous splash display controller does not dynamic page-flip without full DPU clock/bus handover, the screen continued scanning `0x5c000000`, while all subsequent kernel logging went into the unseen shadow buffer `c`!
+- **Resolution**:
+  - Added patch `0957-willow-fb-direct-console.patch`: requires boot-arg `sweetfb_shadow=1` to allocate shadow buffer; by default leaves `fCons = NULL`, so `sweet_console_retarget` is never called and the console draws directly to `0x5c000000` throughout the entire boot!
