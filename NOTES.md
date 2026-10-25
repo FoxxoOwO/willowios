@@ -255,9 +255,18 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - RCA is 2, card is alive and in TRAN state (`state=4`), ready for data (`0x900`).
   - `dll=0x6000642c` (DLL powered down & reset), `hc2=0` (SDR mode).
   - Cause of `DATA error! is=0x208000`: ABL left the eMMC chip in HS400 DDR mode (`0x06`). The host controller was sampling in SDR mode (only on rising clock edge), dropping every second half-word and causing CRC error.
-- **Fix (commit `770bf5f`, CI run `40177212804`)**:
-  - Executes JEDEC standard HS400 exit sequence via `CMD6` (SWITCH):
-    1. `CMD6` writes `0x01` to `EXT_CSD_HS_TIMING` (185) -> exits HS400 to High-Speed SDR mode (<= 52 MHz).
-    2. `CMD6` writes `0x02` to `EXT_CSD_BUS_WIDTH` (183) -> sets standard 8-bit SDR bus width (fallback to 1-bit `0x00`).
-  - Configures host controller for 8-bit SDR, High-Speed, 1.8V bus power, 25 MHz clock (`N=4`).
-  - Repacked local `shim/out/shim-evox-boot.img` (17,756,160 bytes).
+## MILESTONE (2026-10-25, OBSERVED AND PHOTOGRAPHED): FULL XNU BOOT TO VFS_MOUNTROOT & eMMC STORAGE WORKING!
+- Verified from photos `media_1792918469069_ef41b1d5.jpg` and `media_1792918471137_a4aa6655.jpg`:
+  - `SWEET UFS: eMMC card status 0x900 (state=4, rca=2)`
+  - JEDEC HS400 exit to High-Speed SDR via `CMD6` succeeded!
+  - Sector 0 read PASSED without CRC errors!
+  - SDHCI eMMC host scanner read the GPT partition table and matched `userdata` partition!
+  - `BSD root: ufsroot0, major 1, minor 0`
+  - `bsd_init: vfs_mountroot` -> read volume header from `userdata`!
+  - `hfs_ValidateHFSPlusVolumeHeader: unknown Volume Signature : 1020`
+  - Real-time subsystems verified active:
+    - Display scanout: `SWEET INTF1: 318 frames in 5 s` (~60 FPS with active TE sync)
+    - Hardware keys: `SWEET KEYS: key=0 down=1 pon=0xe3 gpio4:c110=0x1`, `SWEET HID: key 0x30 down` (power/volume buttons dispatching HID events)
+    - Battery: `SWEET BATTERY: static fallback, 100% 4200mV external=1 charging=0`
+    - Touch: `SWEET TOUCH: mapping GCC/TLMM/SE2`
+  - XNU kernel is running interactively in `vfs_mountroot` retry loop waiting for an HFS+/APFS filesystem on `userdata`.
