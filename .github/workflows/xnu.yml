@@ -148,9 +148,9 @@ jobs:
           if [ -n "$K" ]; then
             python3 tools/mkadt.py -o out/willow.adt
             python3 tools/mkpayload.py -k "$K" -d out/willow.adt -o out/payload.bin
-            (cd shim && CC=aarch64-elf-gcc OBJCOPY=aarch64-elf-objcopy READELF=aarch64-elf-readelf NM=aarch64-elf-nm ./build.sh ../out/payload.bin)
+            (cd shim && CC=aarch64-elf-gcc OBJCOPY=aarch64-elf-objcopy READELF=aarch64-elf-readelf NM=aarch64-elf-nm bash ./build.sh ../out/payload.bin)
             cp shim/out/shim-boot.img out/boot-willow.img
-            (cd enxerto && BOARD=willow CROSS=aarch64-elf- ./build.sh ../out/payload.bin)
+            (cd enxerto && BOARD=willow CROSS=aarch64-elf- bash ./build.sh ../out/payload.bin)
             cp enxerto/out/enxerto-boot.img out/boot-willow-enxerto.img
             cp enxerto/out/bergamota-fastboot.img out/boot-willow-fastboot.img
           fi
