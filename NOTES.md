@@ -230,4 +230,9 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - `SWEET UFS: willow SDHCI eMMC host ready (pstate=0x1f800f0)`!
   - `panic: IOFindBSDRoot: SWEET UFS root ufsroot0 unavailable: 60 @IOKitBSDInit.cpp:778` (60 = `ETIMEDOUT`)
 - **Action**:
-  - Added patch `0958-willow-sdhci-diag.patch`: standardizes SDHCI command sequencing to strict 16-bit halfword stores (`SDHCI_TRANSFER_MODE` then `SDHCI_COMMAND`), switches to single-sector transfers (`chunk = 1`, CMD17) to eliminate Auto-CMD12 issues, and adds fine-grained register logging (`hctrl`, `hc2`, `clk`, `pstate`, `cqcfg`, `is`).
+  - Identified root cause of CMD17 timeout: `SDHCI_CLOCK_CONTROL` had `clk=0x3` (`INT_EN` + `INT_STABLE`), but `SDHCI_CLOCK_CARD_EN` (`0x0004`) was 0 (gated by bootloader handover), and Qualcomm `CORE_CLK_PWRSAVE` was not cleared.
+  - Added patch `0958-willow-sdhci-diag.patch`:
+    - Enables card clock output (`SDHCI_CLOCK_CARD_EN` = 0x4) and clears Qualcomm `CORE_CLK_PWRSAVE` at `su.regs + 0x20c`.
+    - Handles line resets with automatic card clock re-enablement.
+    - Adds `sdhci_cmd_simple` to query card status via CMD13 (RCA 1 / RCA 0), select the card via CMD7 if in `STBY`, and set block length 512 via CMD16.
+    - Standardizes SDHCI command sequencing to strict 16-bit halfword stores (`SDHCI_TRANSFER_MODE` then `SDHCI_COMMAND`), switches to single-sector transfers (`chunk = 1`, CMD17) to eliminate Auto-CMD12 issues, and adds fine-grained register logging (`hctrl`, `hc2`, `clk`, `pstate`, `cqcfg`, `is`).
