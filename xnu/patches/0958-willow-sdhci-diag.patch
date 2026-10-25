@@ -1,4 +1,4 @@
-Subject: [PATCH 958/958] willow: sdhci 8-bit bus width, 1.8V bus power, auto-calibration and diag
+Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-bit bus width, 1.8V power
 
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
@@ -6,9 +6,9 @@ Subject: [PATCH 958/958] willow: sdhci 8-bit bus width, 1.8V bus power, auto-cal
  #define SDHCI_INT_DATA_AVAIL    0x00000020u
  #define SDHCI_INT_ERROR         0x00008000u
  
-+static uint8_t g_sdhci_width = 0x20;
-+static uint16_t g_sdhci_div = 8;
-+static int g_sdhci_calib = 1;
++static uint8_t g_sdhci_width = 0x24;
++static uint16_t g_sdhci_div = 4;
++static int g_sdhci_calib = 0;
 +
 +static void
 +sdhci_set_config(uint8_t width, uint16_t clk_div)
@@ -248,7 +248,7 @@ Subject: [PATCH 958/958] willow: sdhci 8-bit bus width, 1.8V bus power, auto-cal
  				break;
  			}
  			delay(1);
-@@ -660,18 +776,73 @@
+@@ -660,18 +776,68 @@
  {
  	if (su.sdhci) {
  		if (su.reg_size >= 0x2000u) {
@@ -268,24 +268,17 @@ Subject: [PATCH 958/958] willow: sdhci 8-bit bus width, 1.8V bus power, auto-cal
 -		uint16_t hc2 = *(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2);
 -		*(volatile uint16_t *)(su.regs + SDHCI_HOST_CONTROL2) = hc2 & ~(1u << 12);
 +
-+		printf("SWEET UFS: raw: hctrl=%#x clk=%#x pstate=%#x cap=%#x hc2=%#x vspec=%#x dll=%#x\n",
-+		       ufs_rd(SDHCI_HOST_CONTROL),
-+		       ufs_rd(SDHCI_CLOCK_CONTROL),
-+		       ufs_rd(SDHCI_PRESENT_STATE),
-+		       ufs_rd(0x40u),
-+		       ufs_rd(0x3cu),
-+		       (su.reg_size >= 0x300u) ? ufs_rd(0x20cu) : 0,
-+		       (su.reg_size >= 0x300u) ? ufs_rd(0x200u) : 0);
-+
-+		/* Initial clock & power setup */
-+		sdhci_set_config(g_sdhci_width, g_sdhci_div);
++		/* Initial clock & power: 1.8V bus power, safe divider 8 */
++		sdhci_set_config(0x00, 8);
 +
 +		/* Probe RCA for CMD13 (2, 1, 0) */
 +		uint32_t rcas[] = { 2u << 16, 1u << 16, 0 };
++		uint32_t active_rca = 2u << 16;
 +		for (int i = 0; i < 3; i++) {
 +			uint32_t card_status = 0;
 +			if (sdhci_cmd_simple(13, rcas[i], 0x1au, &card_status) == 0) {
 +				uint32_t st = (card_status >> 9) & 0xfu;
++				active_rca = rcas[i];
 +				printf("SWEET UFS: eMMC card status %#x (state=%u, rca=%u)\n",
 +				       card_status, st, rcas[i] >> 16);
 +				if (st == 3) {
@@ -296,34 +289,36 @@ Subject: [PATCH 958/958] willow: sdhci 8-bit bus width, 1.8V bus power, auto-cal
 +			}
 +		}
 +
-+		/* Auto-calibrate bus width and clock by test-reading sector 0 */
++		/* JEDEC standard HS400 exit sequence to High-Speed SDR */
++		/* Step 1: Switch HS_TIMING (EXT_CSD[185]) to 1 (High-Speed SDR <= 52 MHz) */
++		int r_hs = sdhci_cmd_simple(6, (3u << 24) | (185u << 16) | (1u << 8), 0x1bu, NULL);
++		/* Step 2: Switch BUS_WIDTH (EXT_CSD[183]) to 2 (8-bit SDR) */
++		int r_bw = sdhci_cmd_simple(6, (3u << 24) | (183u << 16) | (2u << 8), 0x1bu, NULL);
++		printf("SWEET UFS: exit HS400 -> High Speed SDR: r_hs=%d r_bw=%d\n", r_hs, r_bw);
++
++		/* Configure host controller: 8-bit bus width, High-Speed, 1.8V, divider 4 (~25 MHz) */
++		g_sdhci_width = 0x24;
++		g_sdhci_div = 4;
++		sdhci_set_config(g_sdhci_width, g_sdhci_div);
++
++		/* Test read sector 0 */
 +		static uint8_t test_buf[512] __attribute__((aligned(64)));
-+		bool probed = false;
-+		uint8_t try_widths[] = { 0x20, 0x24, 0x02, 0x06, 0x00 };
-+		uint16_t try_divs[] = { 8, 4, 0 };
-+
-+		g_sdhci_calib = 1;
-+		for (unsigned d = 0; d < sizeof(try_divs)/sizeof(try_divs[0]) && !probed; d++) {
-+			for (unsigned w = 0; w < sizeof(try_widths)/sizeof(try_widths[0]) && !probed; w++) {
-+				sdhci_set_config(try_widths[w], try_divs[d]);
-+				if (sdhci_rw_sectors(0, 1, test_buf, false) == 0) {
-+					g_sdhci_width = try_widths[w];
-+					g_sdhci_div = try_divs[d];
-+					probed = true;
-+					printf("SWEET UFS: calibrate OK! width=%#x div=%u (sector 0 read PASSED)\n",
-+					       g_sdhci_width, g_sdhci_div);
-+					break;
-+				}
-+			}
-+		}
-+		g_sdhci_calib = 0;
-+
-+		if (!probed) {
-+			/* Fallback to 8-bit bus width, divider 8 */
-+			printf("SWEET UFS: calibration failed, defaulting to width 0x20 div 8\n");
-+			g_sdhci_width = 0x20;
-+			g_sdhci_div = 8;
++		int err = sdhci_rw_sectors(0, 1, test_buf, false);
++		if (err != 0) {
++			/* Fallback: try 1-bit SDR bus width */
++			printf("SWEET UFS: 8-bit read failed (%d), falling back to 1-bit SDR...\n", err);
++			sdhci_cmd_simple(6, (3u << 24) | (183u << 16) | (0u << 8), 0x1bu, NULL);
++			g_sdhci_width = 0x04;
++			g_sdhci_div = 4;
 +			sdhci_set_config(g_sdhci_width, g_sdhci_div);
++			err = sdhci_rw_sectors(0, 1, test_buf, false);
++		}
++
++		if (err == 0) {
++			printf("SWEET UFS: sector 0 read PASSED! width=%#x div=%u magic=%#x\n",
++			       g_sdhci_width, g_sdhci_div, *(uint32_t *)test_buf);
++		} else {
++			printf("SWEET UFS: sector 0 read FAILED: %d\n", err);
 +		}
 +
  		printf("SWEET UFS: willow SDHCI eMMC host ready (pstate=%#x)\n", ufs_rd(SDHCI_PRESENT_STATE));
