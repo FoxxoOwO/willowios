@@ -307,11 +307,19 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
     - `SWEET AKS`: AppleKeyStore serving cryptographic tokens for all system daemons!
     - `SWEET INTF1`: continuous splash 60 FPS scanout active (`302 frames in 5 s`).
     - `SMP`: Process sampler tracing backtraces of `SpringBoard` and `backboardd` threads running normally in `CFRunLoopRun()`.
+- Verified Hardware Proof of Life (Photo `media_1792945831702_0d811098.jpg`):
+  - `SWEET FB: backboardd sel 4 in 0/0 out 1/0 -> 0x0` (SwapBegin SUCCEEDED!)
+  - `SWEET FB: backboardd sel 5 in 0/132 out 0/0 -> 0x0` (SwapEnd SUCCEEDED!)
+  - `SWEET FB: display off ignored (sweetfb_stayon)` (screen stay-on handler verified active!)
+  - `SpringBoard` opened `AppleKeyStore` and `IOPMrootDomain`!
+  - `lsd` (LaunchServicesDaemon) registered and validated by `SWEET AMFI`!
+  - `rapportd`, `mobiletimerd`, `mlsagent` executing normally.
 - Display Transition:
   - Repacked payload with `sweetfb_noconsole=1 sweetfb_stayon=1`:
     `cmdline: debug=0xc serial=3 cpus=1 keepsyms=1 startup_debug=1 -v -enable_kprintf_spam rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 launchd_unsecure_cache=1 wdt_test=no_user_checkin wdt=-1 ufsrw=1 rootrw=1 sweetfb_hz=60 sweetfb_noconsole=1 sweetfb_stayon=1`
   - Output image ready at [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img) (17,756,160 bytes).
-  - Next Action: Flash `shim/out/shim-evox-boot.img` via fastboot and observe graphical transition.
+  - Next Action: Flash `shim/out/shim-evox-boot.img` via fastboot and observe graphical transition (console mute on first swap).
+
 
 
 
