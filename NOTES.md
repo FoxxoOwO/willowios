@@ -285,7 +285,13 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
     - `vm_shared_region_start_address() failed` -> dyld shared cache was not mapped into address space, so dyld could not find `/usr/lib/libSystem.B.dylib`.
 - Resolution:
   - Added patch `0959-willow-shared-region-uid-check.patch`: allows dyld shared cache with non-root UID (501) and bypasses `SF_RESTRICTED` SIP flag under `ARM64_BOARD_CONFIG_SWEET`.
-  - Pushed to main to trigger GitHub Actions build of XNU kernel.
+  - Pushed to main (commit `2518536`).
+  - GitHub Actions run `40186601695` completed with `success` in 2m45s.
+  - Downloaded updated `kernel.development.sweet` (18,052,352 bytes).
+  - Regenerated `xnu/out/payload.bin` with complete boot-args.
+  - Repacked [`shim/out/shim-evox-boot.img`](shim/out/shim-evox-boot.img) (17,756,160 bytes).
+- Next Action: Put phone into Fastboot mode (Hold Volume Down + Power), flash updated `boot` and reboot to verify shared region mapping and dyld shared cache load!
+
 
 
 
