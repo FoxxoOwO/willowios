@@ -201,4 +201,5 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - `AppleMobileFileIntegrity` service published
   - BSD initialization reached: printed official Berkeley copyright banner:
     `Copyright (c) 1982, 1986, 1989, 1991, 1993\n  The Regents of the University of California. All rights reserved.`
-  - Cursor resting right at root device lookup (`IOFindBSDRoot` / `sweet-ufs`).
+  - Cursor resting right at BSD init phase (between copyright and `mac_policy_initbsd`).
+- Added patch `0956-willow-bsdinit-debug.patch` to enable `DEBUG_BSDINIT` with visible `printf` checkpoints to pinpoint the exact instruction executing next.
