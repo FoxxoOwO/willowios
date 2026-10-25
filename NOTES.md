@@ -250,8 +250,14 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
   - Error: `SDHCI: DATA error! is=0x208000` (`SDHCI_INT_DATA_CRC = 0x200000`).
   - Cause: Host controller was in 1-bit bus width (`hctrl=0xf00`, byte 0 was 0), but eMMC card was left by ABL in 8-bit bus width (`qcom,bus-width = <8>`). Controller read only DAT0 and CRC check failed.
   - Also: Controller capabilities (`0x40`) confirmed voltage is 1.8V (bit 26 = 1), not 3.3V.
-- **Fix (commit `7845eff`, CI run `40176292616`)**:
-  - Sets 1.8V bus power (`0x0B00`).
-  - Implements dynamic auto-calibration of bus width (8-bit `0x20`/`0x24`, 4-bit `0x02`/`0x06`, 1-bit `0x00`) and clock dividers (8, 4, 0) by test-reading sector 0.
-  - Probes RCA 2, 1, 0 for CMD13.
+- **Observed on Hardware (Photo `media_1792917155582_f3bef44d.jpg`)**:
+  - `SWEET UFS: eMMC card status 0x900 (state=4, rca=2)`!
+  - RCA is 2, card is alive and in TRAN state (`state=4`), ready for data (`0x900`).
+  - `dll=0x6000642c` (DLL powered down & reset), `hc2=0` (SDR mode).
+  - Cause of `DATA error! is=0x208000`: ABL left the eMMC chip in HS400 DDR mode (`0x06`). The host controller was sampling in SDR mode (only on rising clock edge), dropping every second half-word and causing CRC error.
+- **Fix (commit `770bf5f`, CI run `40177212804`)**:
+  - Executes JEDEC standard HS400 exit sequence via `CMD6` (SWITCH):
+    1. `CMD6` writes `0x01` to `EXT_CSD_HS_TIMING` (185) -> exits HS400 to High-Speed SDR mode (<= 52 MHz).
+    2. `CMD6` writes `0x02` to `EXT_CSD_BUS_WIDTH` (183) -> sets standard 8-bit SDR bus width (fallback to 1-bit `0x00`).
+  - Configures host controller for 8-bit SDR, High-Speed, 1.8V bus power, 25 MHz clock (`N=4`).
   - Repacked local `shim/out/shim-evox-boot.img` (17,756,160 bytes).
