@@ -17,6 +17,10 @@ on:
           Leave blank to use the latest successful rootfs run.
         default: ""
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   patch:
     runs-on: macos-14
