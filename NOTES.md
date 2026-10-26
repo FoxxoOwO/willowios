@@ -331,3 +331,39 @@ All 5 `willow` patches live in [`xnu/patches/`](xnu/patches/) on top of the 201 
 - Photos show iOS userland running (SpringBoard, backboardd SwapBegin/SwapEnd = 0x0, 60 FPS) but the screen shows only kernel console text, even with sweetfb_noconsole=1 (user: "jenom text"). No "SWEET FB: swap N layer" line seen, so present() probably has not run yet (observation), cause unknown.
 - Patch 0960 (CI run 40213343363, success): mute console at first SwapEnd, log first 8 present() calls (mask/consShown/paused/muted).
 - tools/fetch_kernel.py RUN_ID downloads the xnu-kernel artifact. shim/out/shim-evox-boot.img repacked (same cmdline). NEXT: flash, photograph the lines "first SwapEnd, console muted=" and "present #"; if screen freezes/black pull the persistent log (tools/sweet-log-pull.sh via recovery).
+
+## 2026-10-25 20:00: backboardd/SpringBoard Mach IPC deadlock — new blocker
+
+### Log analysis (sweet-log4.bin, flush #97, 179 KB, boot ~15 min)
+- mobileactivationd: ThrottleInterval=300 works — crashes once at boot (sig 5 SIGTRAP), then respawns at ~7 min intervals. lsd trust confirmed: `SWEET AMFI: user client selector 6 from lsd: trusted` ✓
+- dasd/syncdefaultsd/fairplayd.H2: Disabled=true, zero crashes ✓
+- display on: `SWEET FB: display on` ✓, backboardd runs full init sequence (sel 57,15,22,29,33,74,12,6,27,17,84,50) ✓
+- NO `first SwapEnd`, NO `present #`, NO `SWEET INTF1` FPS log → vsync deliver path unclear
+
+### Deadlock (samples 2–7, ~10 min static)
+- **backboardd t0**: `pc 0x215211030 bt ... 0x1d9a5c148→0x1d9a5d2e0→0x1d9a61d20→0x102b51e40→0x1f7224344`
+  - `0x1f7224344` unslid (slide 0x52c04000) = `0x1cb20344` = libsystem_kernel mach_msg_trap
+  - backboardd waits for Mach reply from some sender; blocked since sample 2
+- **SpringBoard t0**: `pc 0x215211030 bt ... 0x1e074eec4→0x1e074f25c→0x2247ee0ec→0x1d3e10224→0x1d3da9cb0→0x1d3da86e0`
+  - `0x1d3da86e0` unslid = `0x17d2e6e0` in backboardd binary = BKS framework call
+  - SpringBoard waits for reply from backboardd daemon → CIRCULAR DEADLOCK
+
+### Hypothesis
+Both processes are stuck waiting for a Mach IPC reply from the other:
+SpringBoard → BKSWorkspaceCreateContext (or similar scene init) → waits for backboardd reply.
+backboardd → waits for SpringBoard to ack something (possibly window server token exchange).
+
+In the successful boot (photo, previous session) SwapBegin/SwapEnd appeared before this deadlock; now they never appear. The `sel 57` (unknown, out 1/0 → 0) may be relevant — backboardd gets 0 and may interpret it as a failure, entering a retry/wait loop.
+
+### What changed
+- iOSRoot now has mobileactivationd ThrottleInterval=300 (was Disabled); activationd correctly starts and provides lsd trust.
+- No other rootfs change. Kernel is same (CI 40213343363, patch 0960).
+- The deadlock also occurred in the PREVIOUS boot (log3, flush #34) — same pattern, log was just shorter. This is not a regression from the tweaks, it was present before.
+
+### Next step
+Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which XPC/Mach call backboardd is stuck in. Options:
+1. Use tools/sweet-crash.py to symbolicate the SMP traces against backboardd binary from the rootfs.
+2. Add a kernel patch to log the exact Mach msg sender port name when backboardd blocks (hard).
+3. Add boot-arg `BKWorkspaceNoSetupFence=1` or similar SpringBoard pref to skip the scene-create fence.
+4. Try `FBDisableCAContext` or `FBDisableRemoteApplications` prefs to prevent the round-trip.
+- Current rootfs: scratch/iOSRoot-patched.simg (already flashed, on userdata). Boot image: shim/out/shim-evox-boot.img (CI 40213343363).
