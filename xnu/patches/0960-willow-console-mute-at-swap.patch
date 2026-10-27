@@ -1,23 +1,6 @@
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -806,6 +806,16 @@
- AppleCLCD::swap(const uint8_t *rec)
- {
- 	sweet_fps_count();
-+	/* willow: mute the text console at the first SwapEnd, not only when present() runs */
-+	static bool sweet_first_swap = true;
-+	if (sweet_first_swap) {
-+		int quiet = 0;
-+		sweet_first_swap = false;
-+		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
-+			sweet_console_muted = 1;
-+		}
-+		IOLog("SWEET FB: first SwapEnd, console muted=%d\n", sweet_console_muted);
-+	}
- 	SweetSurface *held[4] = {};
- 	uint32_t mask = get32(rec, 0x104);
- 	for (uint32_t i = 0; i < 4 && i < SWEET_FB_LAYERS; i++) {
-@@ -1317,6 +1327,12 @@
+@@ -1317,6 +1317,12 @@
  {
  	uint32_t mask = get32(rec, 0x104);
  	static int console_only = -1;
@@ -30,3 +13,24 @@
  
  	/* boot-arg sweetfb_console=1: debugging, the panel keeps showing the kernel console */
  	if (console_only < 0) {
+@@ -1426,7 +1432,19 @@
+ 	case kSweetFBSwapWait:
+ 	default:
++		if (selector == 12) {
++			/* sel 12 = display on: mute console here.
++			 * SwapEnd never arrives because backboardd blocks in mach_msg
++			 * waiting for a vsync notify that SweetFramebuffer does not
++			 * deliver before the first swap.  sel 12 always arrives right
++			 * after backboardd opens the display, before any SwapBegin. */
++			static bool sweet_muted_at_display_on;
++			if (!sweet_muted_at_display_on) {
++				sweet_muted_at_display_on = true;
++				int quiet = 0;
++				if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++					sweet_console_muted = 1;
++				}
++				IOLog("SWEET FB: display on, console muted=%d\n", sweet_console_muted);
++			}
++		}
+ 		break;
+ 	}
