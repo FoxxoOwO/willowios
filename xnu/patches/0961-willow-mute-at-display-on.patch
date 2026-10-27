@@ -1,6 +1,6 @@
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -806,16 +806,6 @@
+@@ -806,17 +806,6 @@
  AppleCLCD::swap(const uint8_t *rec)
  {
  	sweet_fps_count();
@@ -15,35 +15,29 @@
 -		IOLog("SWEET FB: first SwapEnd, console muted=%d\n", sweet_console_muted);
 -	}
  	SweetSurface *held[4] = {};
-
---- a/iokit/Kernel/arm/SweetFramebuffer.cpp
-+++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -1413,6 +1413,24 @@
-+/*
-+ * willow 0961: mute console at sel 12 (display on) from backboardd.
-+ *
-+ * patch 0960 muted at first SwapEnd, but SwapEnd never arrives:
-+ * backboardd blocks in mach_msg waiting for a vsync notify that
-+ * SweetFramebuffer does not deliver before the first swap.
-+ * sel 12 (display on / kIODisplayPowerState) always arrives right
-+ * after backboardd opens the display, before any SwapBegin.
-+ * It is the earliest reliable point at which to mute the console.
-+ */
-+static void
-+sweet_mute_at_display_on(void)
-+{
-+	static bool done = false;
-+	if (done) { return; }
-+	done = true;
-+	int quiet = 0;
-+	if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
-+		sweet_console_muted = 1;
-+	}
-+	IOLog("SWEET FB: display on, console muted=%d\n", sweet_console_muted);
-+}
-+
+ 	uint32_t mask = get32(rec, 0x104);
+ 	for (uint32_t i = 0; i < 4 && i < SWEET_FB_LAYERS; i++) {
+@@ -1426,6 +1415,16 @@
  	case kSweetFBSwapWait:
  	default:
-+		if (selector == 12) { sweet_mute_at_display_on(); }
++		/*
++		 * willow 0961: mute the text console when backboardd sends sel 12
++		 * (display on / kIODisplayPowerState).  patch 0960 muted at the first
++		 * SwapEnd, but SwapEnd never arrives because backboardd waits for a
++		 * vsync notify that SweetFramebuffer does not deliver before the first
++		 * swap.  sel 12 always arrives right after backboardd opens the
++		 * display, before any SwapBegin, and is the earliest reliable mute point.
++		 */
++		if (selector == 12) {
++			static bool sweet_muted_at_display_on;
++			if (!sweet_muted_at_display_on) {
++				sweet_muted_at_display_on = true;
++				int quiet = 0;
++				if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++					sweet_console_muted = 1;
++				}
++				IOLog("SWEET FB: display on, console muted=%d\n", sweet_console_muted);
++			}
++		}
  		break;
  	}
