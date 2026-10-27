@@ -13,7 +13,7 @@
  
  	/* boot-arg sweetfb_console=1: debugging, the panel keeps showing the kernel console */
  	if (console_only < 0) {
-@@ -1426,7 +1432,19 @@
+@@ -1426,4 +1432,20 @@
  	case kSweetFBSwapWait:
  	default:
 +		if (selector == 12) {

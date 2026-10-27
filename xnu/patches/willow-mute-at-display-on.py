@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 """
-willow-mute-at-display-on.py  (applied by xnu.yml after git-apply patches)
+willow-mute-at-display-on.py  (run by xnu.yml from inside dxb/ before build.sh)
 
-Patches iokit/Kernel/arm/SweetFramebuffer.cpp in the dxb/xnu tree to:
-  1. Remove the dead sweet_first_swap block from swap() — SwapEnd never
-     arrives because backboardd blocks in mach_msg waiting for a vsync
-     notify that SweetFramebuffer doesn't deliver before the first swap.
-  2. Add a mute trigger in externalMethod's default: case for selector 12
-     (display on from backboardd) — always arrives before SwapBegin.
+Patches iokit/Kernel/arm/SweetFramebuffer.cpp to mute the text console at
+selector 12 (display on) instead of at the first SwapEnd.  SwapEnd never
+arrives because backboardd blocks in mach_msg waiting for a vsync notify that
+SweetFramebuffer does not deliver before the first swap; sel 12 always arrives
+right after backboardd opens the display, before any SwapBegin.
+
+Also removes the dead sweet_first_swap block that patch 0960 used to add.
+Exits non-zero on failure so CI does not silently ship an unpatched kernel.
 """
-import re, sys, pathlib
+import sys, pathlib
 
-src = pathlib.Path('dxb/xnu/iokit/Kernel/arm/SweetFramebuffer.cpp')
-if not src.exists():
-    sys.exit(f'not found: {src}')
+candidates = [
+    pathlib.Path('xnu/iokit/Kernel/arm/SweetFramebuffer.cpp'),      # cwd = dxb/
+    pathlib.Path('dxb/xnu/iokit/Kernel/arm/SweetFramebuffer.cpp'),  # cwd = repo root
+]
+src = next((p for p in candidates if p.exists()), None)
+if src is None:
+    sys.exit('ERROR: SweetFramebuffer.cpp not found (tried %s)' % ', '.join(str(p) for p in candidates))
 
 text = src.read_text()
 
-# 1. Remove sweet_first_swap block from swap() (added by patch 0960)
+# 1. Remove the dead sweet_first_swap block from swap() (added by older 0960)
 old_swap_block = '''\tsweet_fps_count();
 \t/* willow: mute the text console at the first SwapEnd, not only when present() runs */
 \tstatic bool sweet_first_swap = true;
@@ -31,17 +37,13 @@ old_swap_block = '''\tsweet_fps_count();
 \t}
 \tSweetSurface'''
 
-new_swap_block = '''\tsweet_fps_count();
-\tSweetSurface'''
-
 if old_swap_block in text:
-    text = text.replace(old_swap_block, new_swap_block, 1)
+    text = text.replace(old_swap_block, '\tsweet_fps_count();\n\tSweetSurface', 1)
     print('removed sweet_first_swap block from swap()')
 else:
-    print('sweet_first_swap block not found (already removed or patch 0960 not applied) — skipping')
+    print('sweet_first_swap block not present — ok')
 
-# 2. Add display-on mute in externalMethod default: case before break;
-# The unique context is:  case kSweetFBSwapWait:\n\tdefault:\n\t\tbreak;
+# 2. Add display-on mute in externalMethod's default: case, before break;
 old_default = '''\tcase kSweetFBSwapWait:
 \tdefault:
 \t\tbreak;'''
@@ -69,8 +71,13 @@ new_default = '''\tcase kSweetFBSwapWait:
 if old_default in text:
     text = text.replace(old_default, new_default, 1)
     print('added display-on mute in externalMethod default: case')
+elif 'sweet_muted_at_display_on' in text:
+    print('display-on mute already present — ok')
 else:
-    sys.exit('ERROR: default: case context not found — cannot apply mute patch')
+    idx = text.find('case kSweetFBSwapWait:')
+    if idx < 0:
+        sys.exit('ERROR: neither kSweetFBSwapWait nor sweet_muted_at_display_on found')
+    sys.exit('ERROR: default: case context not found near kSweetFBSwapWait — inspect SweetFramebuffer.cpp')
 
 src.write_text(text)
 print(f'patched {src}')

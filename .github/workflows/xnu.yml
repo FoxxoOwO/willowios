@@ -103,9 +103,9 @@ jobs:
           MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
         run: |
           ccache -z
-          # Apply Python source patches that git-apply cannot handle
-          for py in patches/willow-*.py; do
-            [ -f "$py" ] && python3 "$py" || true
+          # Apply Python source patches that git-apply cannot handle (must not fail silently)
+          for py in $(ls patches/willow-*.py 2>/dev/null); do
+            python3 "$py" || exit 1
           done
           bash build.sh
           ccache -s
