@@ -189,13 +189,10 @@ def main():
         'BKNoWatchdogs': True,
         'FBLaunchWatchdogExceptions': {'com.apple.purplebuddy': 100.0},
         'MCForceShowCloudConfigurationUI': False,
-        # Avoid CAContext/BKSWorkspace deadlock during scene init:
-        # backboardd sends a Mach msg to SpringBoard waiting for CAContext reply
-        # while SpringBoard waits for backboardd reply → circular deadlock.
-        # These flags skip the remote context round-trip.
-        'FBDisableRemoteViewControllers': True,
-        'SBDisableRemoteApplications': True,
-        'SBForceForceQuitDisabled': True,
+        # NOTE 2026-10-27: FBDisableRemoteViewControllers / SBDisableRemoteApplications /
+        # SBForceForceQuitDisabled were removed.  With them set, backboardd never sent a
+        # single SwapBegin (sel 4) — the CAContext round-trip they were meant to skip is
+        # also what gets CA a render target, so the GUI could never present.
     })
     merge_pref(root, 'com.apple.purplebuddy', {
         'SetupDone': True, 'SetupFinishedAllSteps': True, 'SetupVersion': 11,
