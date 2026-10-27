@@ -1,0 +1,49 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -806,16 +806,6 @@
+ AppleCLCD::swap(const uint8_t *rec)
+ {
+ 	sweet_fps_count();
+-	/* willow: mute the text console at the first SwapEnd, not only when present() runs */
+-	static bool sweet_first_swap = true;
+-	if (sweet_first_swap) {
+-		int quiet = 0;
+-		sweet_first_swap = false;
+-		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
+-			sweet_console_muted = 1;
+-		}
+-		IOLog("SWEET FB: first SwapEnd, console muted=%d\n", sweet_console_muted);
+-	}
+ 	SweetSurface *held[4] = {};
+
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1413,6 +1413,24 @@
++/*
++ * willow 0961: mute console at sel 12 (display on) from backboardd.
++ *
++ * patch 0960 muted at first SwapEnd, but SwapEnd never arrives:
++ * backboardd blocks in mach_msg waiting for a vsync notify that
++ * SweetFramebuffer does not deliver before the first swap.
++ * sel 12 (display on / kIODisplayPowerState) always arrives right
++ * after backboardd opens the display, before any SwapBegin.
++ * It is the earliest reliable point at which to mute the console.
++ */
++static void
++sweet_mute_at_display_on(void)
++{
++	static bool done = false;
++	if (done) { return; }
++	done = true;
++	int quiet = 0;
++	if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++		sweet_console_muted = 1;
++	}
++	IOLog("SWEET FB: display on, console muted=%d\n", sweet_console_muted);
++}
++
+ 	case kSweetFBSwapWait:
+ 	default:
++		if (selector == 12) { sweet_mute_at_display_on(); }
+ 		break;
+ 	}
