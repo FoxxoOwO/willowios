@@ -16,6 +16,11 @@ on:
           GitHub Actions run ID of the rootfs workflow to pull iOSRoot from.
           Leave blank to use the latest successful rootfs run.
         default: ""
+      gpu_run_id:
+        description: >
+          Kept for compatibility; the shim is taken from the gpu-latest release
+          the gpu workflow publishes. "none" installs nothing.
+        default: ""
 
 permissions:
   actions: read
@@ -47,6 +52,16 @@ jobs:
           fi
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "Using rootfs run ID: $RUN_ID"
+
+      - name: Download the GL shim
+        if: github.event.inputs.gpu_run_id != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # the gpu workflow publishes to the gpu-latest release (artifacts are over quota)
+          gh release download gpu-latest --pattern "*.dylib" --dir shim/ --clobber
+          gh release download gpu-latest --pattern "MANIFEST.sha256" --dir shim/ --clobber
+          ls -l shim/
 
       - name: Download iOSRoot sparse image artifact
         env:
@@ -132,6 +147,19 @@ jobs:
       - name: Apply sweet-root-tweaks.py
         run: |
           sudo python3 tools/sweet-root-tweaks.py "$MNT"
+
+      - name: Install the GL shim (/topaz/lib)
+        if: github.event.inputs.gpu_run_id != 'none'
+        run: |
+          sudo mkdir -p "$MNT/topaz/lib"
+          sudo cp shim/libtopaz-gl.dylib shim/libtopaz-inject.dylib shim/libOSMesa.8.dylib "$MNT/topaz/lib/"
+          sudo chmod 755 "$MNT/topaz/lib"/*.dylib
+          ( cd "$MNT/topaz/lib" && sudo shasum -a 256 *.dylib )
+          sudo tee "$MNT/topaz/lib/INSTALLED" >/dev/null <<EOF
+          installed by .github/workflows/patch-rootfs.yml from the gpu-latest release
+          (libtopaz-gl.dylib, libtopaz-inject.dylib, libOSMesa.8.dylib)
+          EOF
+          ls -l "$MNT/topaz/lib"
 
       - name: Unmount
         if: always()

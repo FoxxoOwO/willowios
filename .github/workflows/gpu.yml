@@ -19,6 +19,9 @@ on:
       - "userland/mkeagl.py"
       - ".github/workflows/gpu.yml"
 
+permissions:
+  contents: write
+
 concurrency:
   group: gpu-${{ github.ref }}
   cancel-in-progress: true
@@ -66,9 +69,15 @@ jobs:
           MESA="$PWD/userland/mesa/build-mesa/out" bash userland/gpu/build.sh "$PWD/out-gpu"
           cat out-gpu/MANIFEST.sha256
 
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: topaz-gl
-          path: out-gpu/
-          if-no-files-found: error
+      # Release assets, not workflow artifacts: the rootfs image alone fills the artifact quota.
+      - name: Publish (release gpu-latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=gpu-latest
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "OpenGL ES shim for backboardd (latest)" \
+              --notes "libtopaz-gl.dylib, libtopaz-inject.dylib and libOSMesa.8.dylib for iOS 16.7.16 (20H392), built by the gpu workflow. Download with: gh release download gpu-latest"
+          gh release upload "$TAG" out-gpu/libtopaz-gl.dylib out-gpu/libtopaz-inject.dylib \
+            out-gpu/libOSMesa.8.dylib out-gpu/MANIFEST.sha256 --clobber
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size) B"' 

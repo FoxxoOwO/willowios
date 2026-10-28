@@ -20,6 +20,7 @@
 #include <sys/ucontext.h>
 #include <objc/runtime.h>
 #include <mach/mach.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 extern const void *_dyld_get_shared_cache_range(size_t *length);
@@ -229,19 +230,27 @@ topaz_inject(void)
 		syslog(LOG_NOTICE, "topaz: gl=0: CoreAnimation keeps its software renderer");
 		return;
 	}
+	/*
+	 * gl=force: draw with our library whether or not the GPU service is there -- the Mesa behind it
+	 * is then its software driver (softpipe), which is how the whole path (EAGLContext, the table of
+	 * functions, the IOSurface textures) is tested with nothing in the kernel.
+	 */
+	bool forced = sysctlbyname("kern.bootargs", args, &size, NULL, 0) == 0 && strstr(args, " gl=force") != NULL;
 	/* the kernel starts the GPU once the root filesystem is there: give it a moment */
-	for (int i = 0; i < 50; i++) {
+	for (int i = 0; i < 50 && !forced; i++) {
 		gpu = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("RedwoodGPU"));
 		if (gpu != 0) {
 			break;
 		}
 		usleep(100000);
 	}
-	if (gpu == 0) {
+	if (gpu == 0 && !forced) {
 		syslog(LOG_NOTICE, "topaz: no GPU service: software renderer");
 		return;
 	}
-	IOObjectRelease(gpu);
+	if (gpu != 0) {
+		IOObjectRelease(gpu);
+	}
 	topaz_crash_handlers();
 	lib = dlopen(TOPAZ_GL, RTLD_NOW);
 	gl_hooks(lib);
