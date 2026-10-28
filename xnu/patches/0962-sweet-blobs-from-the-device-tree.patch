@@ -5,7 +5,7 @@ Subject: sweet: install files carried in the device tree (the OpenGL ES library 
 ---
  bsd/conf/files | 1 +
  bsd/kern/sweet_blobs.c | 156 +++++
- bsd/vfs/vfs_subr.c | 6 ++++++
+ bsd/vfs/vfs_subr.c | 8 ++++++++
 
 diff --git a/bsd/kern/sweet_blobs.c b/bsd/kern/sweet_blobs.c
 new file mode 100644
@@ -180,7 +180,7 @@ diff --git a/bsd/conf/files b/bsd/conf/files
 diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
 --- a/bsd/vfs/vfs_subr.c
 +++ b/bsd/vfs/vfs_subr.c
-@@ -1257,2 +1257,8 @@
+@@ -1261,3 +1261,9 @@
  		if (vfsp->vfc_mountroot) {
  			error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx);
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
@@ -189,3 +189,4 @@ diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
 +				sweet_install_blobs();
 +			}
 +#endif
+ 		} else {
