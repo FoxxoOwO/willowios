@@ -4,7 +4,7 @@ Subject: sweet: install files carried in the device tree (the OpenGL ES library 
 
 ---
  bsd/conf/files | 1 +
- bsd/kern/sweet_blobs.c | 156 +++++
+ bsd/kern/sweet_blobs.c | 157 +++++
  bsd/vfs/vfs_subr.c | 8 ++++++++
 
 diff --git a/bsd/kern/sweet_blobs.c b/bsd/kern/sweet_blobs.c
@@ -12,7 +12,7 @@ new file mode 100644
 index 0000000..1234567
 --- /dev/null
 +++ b/bsd/kern/sweet_blobs.c
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,157 @@
 +/*
 + * SWEET: the files the boot payload carries for the kernel to install.
 + *
@@ -31,6 +31,7 @@ index 0000000..1234567
 +#include <sys/systm.h>
 +#include <sys/kernel.h>
 +#include <sys/vnode.h>
++#include <sys/vnode_internal.h>
 +#include <sys/namei.h>
 +#include <sys/uio.h>
 +#include <sys/fcntl.h>
@@ -93,7 +94,7 @@ index 0000000..1234567
 +	const char *first;
 +
 +	/* vfs_mountroot has just called us; wait for the root vnode, then let it settle a little */
-+	for (int i = 0; i < 100 && rootvnode == NULLVP; i++) {
++	for (int tries = 0; tries < 100 && rootvnode == NULLVP; tries++) {
 +		delay(100 * 1000);
 +	}
 +	delay(2 * 1000 * 1000);
