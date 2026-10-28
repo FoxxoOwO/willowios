@@ -1,0 +1,18 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Subject: sweet: start the blob installer thread once the root is mounted (bsd_init)
+
+---
+ bsd/kern/bsd_init.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -869,4 +869,6 @@
+ 		bsd_init_kprintf("vfs_mountroot\n");
+ 		if (0 == (err = vfs_mountroot())) {
++			extern void sweet_start_blobs(void);
++			sweet_start_blobs();
+ 			break;
+ 		}
