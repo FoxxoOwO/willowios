@@ -1,5 +1,15 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: x <x@x>
 Subject: sweet: install files carried in the device tree (the OpenGL ES library for backboardd)
 
+---
+ bsd/conf/files | 1 +
+ bsd/kern/sweet_blobs.c | 156 +++++
+ bsd/vfs/vfs_subr.c | 6 ++++++
+
+diff --git a/bsd/kern/sweet_blobs.c b/bsd/kern/sweet_blobs.c
+new file mode 100644
+index 0000000..1234567
 --- /dev/null
 +++ b/bsd/kern/sweet_blobs.c
 @@ -0,0 +1,156 @@
@@ -159,13 +169,15 @@ Subject: sweet: install files carried in the device tree (the OpenGL ES library 
 +	}
 +	thread_deallocate(thread);
 +}
+diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
-@@ -1,3 +1,4 @@
+@@ -382,3 +382,4 @@
 +bsd/kern/sweet_blobs.c		standard
  bsd/kern/kern_csr.c			optional config_csr
  bsd/kern/kern_debug.c			standard
  bsd/kern/kern_symfile.c			standard
+diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
 --- a/bsd/vfs/vfs_subr.c
 +++ b/bsd/vfs/vfs_subr.c
 @@ -1257,2 +1257,8 @@

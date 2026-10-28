@@ -120,8 +120,10 @@ jobs:
             -C .. sdk-kernel-platform
           ls -la buildtree.tgz
 
+      # the artifact storage is what the quota counts and the root images fill it: a best effort
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: xnu-buildtree
           path: buildtree.tgz
@@ -164,7 +166,27 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: xnu-kernel
           path: out/
           if-no-files-found: warn
+
+      # Release assets do not count against it: tools/fetch_kernel.py --release takes them from here.
+      - name: Publish (release xnu-latest)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f out/kernel.development.sweet ] || { echo "no kernel to publish"; exit 0; }
+          TAG=xnu-latest
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "xnu for willow (latest)" \
+              --notes "kernel.development.sweet + willow.adt of the last xnu build; fetch with tools/fetch_kernel.py --release xnu-latest"
+          (cd out && tar czf ../xnu-latest.tar.gz kernel.development.sweet willow.adt SHA256SUMS 2>/dev/null || \
+             tar czf ../xnu-latest.tar.gz kernel.development.sweet willow.adt)
+          gh release upload "$TAG" xnu-latest.tar.gz --clobber
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size) B"'
+
+permissions:
+  contents: write
