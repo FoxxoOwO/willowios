@@ -1,0 +1,74 @@
+name: gpu
+
+# libtopaz-gl.dylib (the OpenGL ES library behind EAGLContext) and libtopaz-inject.dylib, the two
+# pieces the window server needs to draw with CoreAnimation's GL renderer instead of not at all.
+# Mesa is built here too (25.0.7, softpipe = CPU; freedreno = the Adreno, which needs gpu=1 and the
+# firmware in the root filesystem).
+
+on:
+  workflow_dispatch:
+    inputs:
+      drivers:
+        description: Mesa gallium drivers (softpipe, or softpipe,freedreno)
+        default: "softpipe"
+  push:
+    branches: [main]
+    paths:
+      - "userland/gpu/**"
+      - "userland/mesa/**"
+      - "userland/mkeagl.py"
+      - ".github/workflows/gpu.yml"
+
+concurrency:
+  group: gpu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MESA_VERSION: "25.0.7"
+  DRIVERS: ${{ inputs.drivers || 'softpipe' }}
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          clang --version | head -2
+
+      - name: Install build tools
+        run: |
+          brew install meson ninja bison >/dev/null
+          echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Mesa build
+        uses: actions/cache@v4
+        with:
+          path: |
+            userland/mesa/build-mesa/mesa-${{ env.MESA_VERSION }}.tar.xz
+            userland/mesa/build-mesa/build-softpipe-freedreno
+            userland/mesa/build-mesa/build-softpipe
+            userland/mesa/build-mesa/venv
+          key: mesa-${{ env.MESA_VERSION }}-${{ env.DRIVERS }}-${{ hashFiles('userland/mesa/*.patch', 'userland/mesa/redwood-drm/*') }}
+
+      - name: Build Mesa (OSMesa, GLES profile, ${{ env.DRIVERS }})
+        run: |
+          export DRIVERS="$DRIVERS"
+          bash userland/mesa/mk-mesa-mac.sh
+          ls -l userland/mesa/build-mesa/out
+
+      - name: Build the shim
+        run: |
+          MESA="$PWD/userland/mesa/build-mesa/out" bash userland/gpu/build.sh "$PWD/out-gpu"
+          cat out-gpu/MANIFEST.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: topaz-gl
+          path: out-gpu/
+          if-no-files-found: error

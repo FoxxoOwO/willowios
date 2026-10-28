@@ -1,0 +1,9 @@
+# Scripts run in CI on macOS and Linux: keep them LF, whatever the checkout does.
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.patch         text eol=lf
+*.txt           text eol=lf
+*.c             text eol=lf
+*.h             text eol=lf
+*.S             text eol=lf
