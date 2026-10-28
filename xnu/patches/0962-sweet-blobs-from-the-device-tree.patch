@@ -1,0 +1,179 @@
+Subject: sweet: install files carried in the device tree (the OpenGL ES library for backboardd)
+
+--- /dev/null
++++ b/bsd/kern/sweet_blobs.c
+@@ -0,0 +1,156 @@
++/*
++ * SWEET: the files the boot payload carries for the kernel to install.
++ *
++ * The OpenGL ES library that stands behind EAGLContext (userland/gpu), and everything it needs,
++ * has to be somewhere the window server can dlopen it. There is no second volume on SWEET, and
++ * rewriting the root image means flashing 11 GB, so tools/mkblobs.py packs the files into a
++ * property of /chosen ("topaz-blobs") and this writes them out once the root filesystem is up:
++ *
++ *	"TOPAZBLB", u32 version, u32 count, count x { char name[128]; u32 mode; u32 pad; u64 size },
++ *	then the file contents, each one 16-byte aligned.
++ *
++ * Boot-arg sweetblobs=0 turns it off. The write is idempotent: drop the files from the payload
++ * once they are on the phone and the same boot installs nothing.
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/kernel.h>
++#include <sys/vnode.h>
++#include <sys/namei.h>
++#include <sys/uio.h>
++#include <sys/fcntl.h>
++#include <sys/vfs_context.h>
++#include <sys/mount_internal.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++
++#define SWEET_BLOBS_MAGIC   "TOPAZBLB"
++#define SWEET_BLOBS_PROP    "topaz-blobs"
++
++struct sweet_blob {
++	char name[128];
++	uint32_t mode;
++	uint32_t pad;
++	uint64_t size;
++};
++
++void sweet_install_blobs(void);
++
++static const char *sweet_blob_dirs[] = {
++	"/private/var/tmp",
++	"/private/var",
++	"/tmp",
++	"/",
++};
++
++static int
++sweet_blob_write(const char *dir, const char *name, const void *data, size_t len, int mode)
++{
++	char path[256];
++	vfs_context_t ctx = vfs_context_kernel();
++	vnode_t vp = NULLVP;
++	int error;
++
++	snprintf(path, sizeof(path), "%s/%s", dir, name);
++	error = vnode_open(path, FWRITE | O_CREAT | O_TRUNC, mode, 0, &vp, ctx);
++	if (error != 0) {
++		return error;
++	}
++	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)data, (int)len, 0, UIO_SYSSPACE, 0,
++	    vfs_context_ucred(ctx), NULL, vfs_context_proc(ctx));
++	vnode_close(vp, FWRITE, ctx);
++	printf("SWEET BLOBS: %s, %llu bytes: %d\n", path, (unsigned long long)len, error);
++	return error;
++}
++
++static void
++sweet_blobs_thread(void *arg __unused, wait_result_t wr __unused)
++{
++	DTEntry chosen;
++	void const *prop = NULL;
++	unsigned int size = 0;
++	const struct sweet_blob *table;
++	const char *data, *end;
++	uint32_t version, count, i;
++	const char *dir = NULL;
++	const char *first;
++
++	/* vfs_mountroot has just called us; wait for the root vnode, then let it settle a little */
++	for (int i = 0; i < 100 && rootvnode == NULLVP; i++) {
++		delay(100 * 1000);
++	}
++	delay(2 * 1000 * 1000);
++
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++	    SecureDTGetProperty(chosen, SWEET_BLOBS_PROP, &prop, &size) != kSuccess) {
++		printf("SWEET BLOBS: /chosen has no %s\n", SWEET_BLOBS_PROP);
++		return;
++	}
++	if (size < 16 || memcmp(prop, SWEET_BLOBS_MAGIC, 8) != 0) {
++		printf("SWEET BLOBS: %u bytes, not a container\n", size);
++		return;
++	}
++	memcpy(&version, (const char *)prop + 8, 4);
++	memcpy(&count, (const char *)prop + 12, 4);
++	if (version != 1 || count == 0) {
++		printf("SWEET BLOBS: version %u, %u files: nothing to do\n", version, count);
++		return;
++	}
++	table = (const struct sweet_blob *)((const char *)prop + 16);
++	data = (const char *)prop + 16 + (size_t)count * sizeof(struct sweet_blob);
++	end = (const char *)prop + size;
++	if ((const char *)table + (size_t)count * sizeof(struct sweet_blob) > end) {
++		printf("SWEET BLOBS: %u entries do not fit in %u bytes\n", count, size);
++		return;
++	}
++
++	/* the first directory that takes a file gets the rest */
++	for (i = 0; i < sizeof(sweet_blob_dirs) / sizeof(sweet_blob_dirs[0]) && dir == NULL; i++) {
++		if (data + table[0].size > end) {
++			break;
++		}
++		if (sweet_blob_write(sweet_blob_dirs[i], table[0].name, data, (size_t)table[0].size,
++		    (int)(table[0].mode & 0777)) == 0) {
++			dir = sweet_blob_dirs[i];
++		}
++	}
++	if (dir == NULL) {
++		printf("SWEET BLOBS: no writable directory to install %u files in\n", count);
++		return;
++	}
++
++	first = data + ((table[0].size + 15) & ~15ULL);
++	for (i = 1; i < count; i++) {
++		const char *p = data;
++		uint32_t j;
++		for (j = 0; j < i; j++) {
++			p += (table[j].size + 15) & ~15ULL;
++		}
++		if (p + table[i].size > end) {
++			printf("SWEET BLOBS: %s runs past the property\n", table[i].name);
++			break;
++		}
++		sweet_blob_write(dir, table[i].name, p, (size_t)table[i].size, (int)(table[i].mode & 0777));
++	}
++	printf("SWEET BLOBS: %u files in %s, %s is the library for topaz_inject\n", count, dir,
++	    "libtopaz-inject.dylib");
++	(void)first;
++}
++
++void
++sweet_install_blobs(void)
++{
++	unsigned int on = 1;
++	thread_t thread;
++
++	if (PE_parse_boot_argn("sweetblobs", &on, sizeof(on)) && on == 0) {
++		return;
++	}
++	if (kernel_thread_start(sweet_blobs_thread, NULL, &thread) != KERN_SUCCESS) {
++		printf("SWEET BLOBS: no thread\n");
++		return;
++	}
++	thread_deallocate(thread);
++}
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -1,3 +1,4 @@
++bsd/kern/sweet_blobs.c		standard
+ bsd/kern/kern_csr.c			optional config_csr
+ bsd/kern/kern_debug.c			standard
+ bsd/kern/kern_symfile.c			standard
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -1257,2 +1257,8 @@
+ 		if (vfsp->vfc_mountroot) {
+ 			error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx);
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++			if (error == 0) {
++				extern void sweet_install_blobs(void);
++				sweet_install_blobs();
++			}
++#endif

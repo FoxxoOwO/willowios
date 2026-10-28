@@ -36,9 +36,14 @@ python3 "$USERLAND/mkeagl.py" "$HERE/src/eagl_slots.txt" "$MESA/gl.xml" "$MESA/e
 	-o "$OUT/libtopaz-inject.dylib" "$HERE/topaz_inject.c"
 
 cp "$MESA/libOSMesa.8.dylib" "$OUT/"
-# rpath @loader_path so that libOSMesa finds libdrm (redwood-drm) next to it when that is built in
+# The three travel together, wherever the kernel installs them (/private/var/tmp when the root is
+# written from the payload, /topaz/lib when patch-rootfs puts them there): @loader_path, not an
+# absolute path, and an rpath so libOSMesa finds libdrm (redwood-drm) next to it.
 if command -v install_name_tool >/dev/null; then
 	install_name_tool -add_rpath @loader_path "$OUT/libOSMesa.8.dylib" 2>/dev/null || true
+	install_name_tool -change /topaz/lib/libOSMesa.8.dylib @loader_path/libOSMesa.8.dylib \
+		"$OUT/libtopaz-gl.dylib"
+	install_name_tool -add_rpath @loader_path "$OUT/libtopaz-gl.dylib" 2>/dev/null || true
 fi
 # ad-hoc signature: AMFI here is the kernel's stand-in, but dyld wants a valid code directory
 for f in "$OUT"/*.dylib; do

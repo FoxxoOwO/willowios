@@ -73,7 +73,7 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowmem=False):
+def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowmem=False, blobs=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = (
         (LOW_PHYS_BASE, LOW_MEM_SIZE)
@@ -108,7 +108,8 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowm
             ("effective-production-status-ap", u32(0)),
             ("certificate-security-mode", u32(1)),
             ("effective-security-mode-sep", u32(1)),
-        ],
+        ]
+        + ([] if blobs is None else [("topaz-blobs", blobs)]),
         [
             node("memory-map", [ph()]),
             node("asmb", [ph(), ("lp-sip0", u64(0x6F)), ("lp-sip1", u32(1))]),
@@ -268,7 +269,12 @@ if __name__ == "__main__":
             raise SystemExit("Usage: mkadt.py [-o] OUT.adt [--dump] [--qemu] [--highmem] [--midmem] [--lowmem] [--native]")
         out_path = pos[0]
 
+    blobs_path = None
+    for i, a in enumerate(argv):
+        if a == "--blobs" and i + 1 < len(argv):
+            blobs_path = argv[i + 1]
     root = build(
+        blobs=open(blobs_path, "rb").read() if blobs_path else None,
         qemu="--qemu" in argv,
         highmem="--highmem" in argv,
         native="--native" in argv,

@@ -25,7 +25,26 @@
 
 extern const void *_dyld_get_shared_cache_range(size_t *length);
 
-#define TOPAZ_GL "/topaz/lib/libtopaz-gl.dylib"
+/*
+ * Where the library may be: /topaz/lib when the root image was patched, /private/var/tmp when the
+ * kernel wrote it out of the boot payload (sweet_blobs.c picks the first writable directory).
+ */
+static const char *topaz_gl_paths[] = {
+	"/topaz/lib/libtopaz-gl.dylib",
+	"/private/var/tmp/libtopaz-gl.dylib",
+	"/private/var/libtopaz-gl.dylib",
+	"/tmp/libtopaz-gl.dylib",
+};
+static const char *
+topaz_gl_path(void)
+{
+	for (unsigned i = 0; i < sizeof(topaz_gl_paths) / sizeof(topaz_gl_paths[0]); i++) {
+		if (access(topaz_gl_paths[i], R_OK) == 0) {
+			return topaz_gl_paths[i];
+		}
+	}
+	return NULL;
+}
 
 /*
  * CoreAnimation's OpenGL ES renderer hands a "function"'s numbers (a colour matrix, ...) to
@@ -223,7 +242,7 @@ topaz_inject(void)
 		container_manager_fixes();
 		return;
 	}
-	if (name == NULL || strcmp(name, "backboardd") != 0 || access(TOPAZ_GL, R_OK) != 0) {
+	if (name == NULL || strcmp(name, "backboardd") != 0 || topaz_gl_path() == NULL) {
 		return;
 	}
 	if (sysctlbyname("kern.bootargs", args, &size, NULL, 0) == 0 && strstr(args, " gl=0") != NULL) {
@@ -252,8 +271,8 @@ topaz_inject(void)
 		IOObjectRelease(gpu);
 	}
 	topaz_crash_handlers();
-	lib = dlopen(TOPAZ_GL, RTLD_NOW);
+	lib = dlopen(topaz_gl_path(), RTLD_NOW);
 	gl_hooks(lib);
 	fprintf(stderr, "topaz-crash: handlers set, GL %s\n", lib ? "loaded" : dlerror());
-	syslog(LOG_NOTICE, "topaz: %s %s", TOPAZ_GL, lib ? "loaded" : dlerror());
+	syslog(LOG_NOTICE, "topaz: %s %s", topaz_gl_path(), lib ? "loaded" : dlerror());
 }
