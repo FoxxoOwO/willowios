@@ -4,15 +4,15 @@ Subject: sweet: install files carried in the device tree (the OpenGL ES library 
 
 ---
  bsd/conf/files | 1 +
- bsd/kern/sweet_blobs.c | 158 +++++
+ bsd/kern/sweet_blobs.c | 164 +++++
  bsd/vfs/vfs_subr.c | 6 ++++++
 
 diff --git a/bsd/kern/sweet_blobs.c b/bsd/kern/sweet_blobs.c
 new file mode 100644
-index 0000000..1234568
+index 0000000..1234569
 --- /dev/null
 +++ b/bsd/kern/sweet_blobs.c
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,164 @@
 +/*
 + * SWEET: the files the boot payload carries for the kernel to install.
 + *
@@ -94,10 +94,11 @@ index 0000000..1234568
 +	const char *first;
 +
 +	/* vfs_mountroot has just called us; wait for the root vnode, then let it settle a little */
-+	for (int tries = 0; tries < 100 && rootvnode == NULLVP; tries++) {
++	for (int tries = 0; tries < 50 && rootvnode == NULLVP; tries++) {
 +		delay(100 * 1000);
 +	}
-+	delay(2 * 1000 * 1000);
++	printf("SWEET BLOBS: root %s\n", rootvnode != NULLVP ? "is up" : "never came");
++	delay(1 * 1000 * 1000);
 +
 +	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
 +	    SecureDTGetProperty(chosen, SWEET_BLOBS_PROP, &prop, &size) != kSuccess) {
@@ -160,7 +161,12 @@ index 0000000..1234568
 +{
 +	unsigned int on = 1;
 +	thread_t thread;
++	static int started;
 +
++	if (started) {
++		return;
++	}
++	started = 1;
 +	if (PE_parse_boot_argn("sweetblobs", &on, sizeof(on)) && on == 0) {
 +		return;
 +	}
