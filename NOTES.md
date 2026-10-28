@@ -408,19 +408,3 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
   gl_resolve.c, osm.c over libOSMesa) in CI (macOS runner has Xcode; needs meson/bison + Mesa
   clone) and install it into the iOSRoot so backboardd/SpringBoard get a GLES renderer.
 - Keep `0960`'s `present #` logging; drop its unreachable mute hunk when convenient.
-
-## 2026-10-28 00:30: console-only screen is a symptom; no SwapBegin at all (regression vs log1)
-### Observation (sweet-log8..11, new rootfs from CI 40553152712, kernels 40548288249 + sweetaccel=0)
-- Display path healthy: `SWEET INTF1: ~310 frames in 5 s`, MDP VIG0 direct scanout, `SWEET FB: display on`, 150+ daemons, only mobileactivation crashes (sig 5 SIGTRAP, reason ns 2 code 0x5).
-- backboardd issues exactly the init selector set (6,8,12,15,17,22,27,28,29,33,50,57,74,84) and then all threads sit in mach_msg (MH+0x9e40); SpringBoard t0 repeats the same mach_msg stack across 7 samples. ZERO `sel 4` (SwapBegin), ZERO `present #`, so console mute (0067/0092/0960) can never fire.
-- QuartzCore still polls `IOServiceMatching("IOAcceleratorES")` ~350 lines then `IOAcceleratorESLegacy` (34 lines), with `sweetaccel=0` as well as with the 0138 stub -> no GPU renderer either way.
-- Reference good boot (scratch/sweet-log.txt, rootfs before any tweaks, CI 40186601695): `sel 4 in 0/0 out 1/0`, `sel 5`, `first SwapEnd, console muted=1`, `present #1 mask 0x80000007 muted 1`. Screen still showed console text even then (NOTES 17:50), i.e. the swapped surface was blank -> CA composited nothing.
-### What was ruled out
-- SpringBoard prefs FBDisableRemoteViewControllers / SBDisableRemoteApplications / SBForceForceQuitDisabled: removed (commit 871b5e1, CI 40553152712), flashed -> no change. Not the cause.
-- `sweetaccel=0` (0138 stub off): no change in swap behaviour.
-- 2 CPUs: both cores come up (`2/2 CPUs initialized`), deadlock unchanged.
-### Conclusion / next
-- The GUI blocker is a renderer, not the console: iOS 16 CoreAnimation needs Metal, and per docs/METAL_ADRENO630.md section 0 the intended route is a replacement OpenGLES.framework (EAGLContext over Mesa/OSMesa, docs/GPU_EAGL.md phases A+B) installed into the iOS rootfs so the CA render server gets a GLES renderer. That code exists in gpu/eagl/ but has never been installed system-wide ("nothing runs inside backboardd yet").
-- Kernel patches 0960 (mute at SwapEnd/display-on) are dead code until a swap exists; keep them, do not expect logs from them.
-- Candidate CI step: build gpu/eagl shim (Xcode + meson + bison + Mesa 25.0.7 clone, ~1.6 GB, ~4 min on macOS runners) as a workflow artifact, then install into the rootfs (replace OpenGLES.framework or DYLD insert for backboardd/SpringBoard) and re-test.
-- Local artifacts: scratch/iOSRoot-patched.simg (flashed rootfs, 11.47 GB sparse), shim/out/shim-evox-boot-mute12.img (0960 + present# logging), shim/out/shim-evox-boot-noaccel.img (sweetaccel=0). Logs scratch/sweet-log8..11.
