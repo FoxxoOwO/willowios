@@ -4,15 +4,15 @@ Subject: sweet: install files carried in the device tree (the OpenGL ES library 
 
 ---
  bsd/conf/files | 1 +
- bsd/kern/sweet_blobs.c | 157 +++++
- bsd/vfs/vfs_subr.c | 8 ++++++++
+ bsd/kern/sweet_blobs.c | 158 +++++
+ bsd/vfs/vfs_subr.c | 6 ++++++
 
 diff --git a/bsd/kern/sweet_blobs.c b/bsd/kern/sweet_blobs.c
 new file mode 100644
-index 0000000..1234567
+index 0000000..1234568
 --- /dev/null
 +++ b/bsd/kern/sweet_blobs.c
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,158 @@
 +/*
 + * SWEET: the files the boot payload carries for the kernel to install.
 + *
@@ -164,6 +164,7 @@ index 0000000..1234567
 +	if (PE_parse_boot_argn("sweetblobs", &on, sizeof(on)) && on == 0) {
 +		return;
 +	}
++	printf("SWEET BLOBS: the root is mounted, a thread looks for /chosen\n");
 +	if (kernel_thread_start(sweet_blobs_thread, NULL, &thread) != KERN_SUCCESS) {
 +		printf("SWEET BLOBS: no thread\n");
 +		return;
@@ -181,13 +182,11 @@ diff --git a/bsd/conf/files b/bsd/conf/files
 diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
 --- a/bsd/vfs/vfs_subr.c
 +++ b/bsd/vfs/vfs_subr.c
-@@ -1261,3 +1261,9 @@
- 		if (vfsp->vfc_mountroot) {
- 			error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx);
+@@ -1267,3 +1267,7 @@
+ 		if (!error) {
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
-+			if (error == 0) {
-+				extern void sweet_install_blobs(void);
-+				sweet_install_blobs();
-+			}
++			extern void sweet_install_blobs(void);
++			sweet_install_blobs();
 +#endif
- 		} else {
+ 			if (bdevvp_rootvp != rootvp) {
+ 				/*
