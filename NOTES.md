@@ -367,3 +367,44 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 3. Add boot-arg `BKWorkspaceNoSetupFence=1` or similar SpringBoard pref to skip the scene-create fence.
 4. Try `FBDisableCAContext` or `FBDisableRemoteApplications` prefs to prevent the round-trip.
 - Current rootfs: scratch/iOSRoot-patched.simg (already flashed, on userdata). Boot image: shim/out/shim-evox-boot.img (CI 40213343363).
+
+## 2026-10-28: console-only is a symptom — CA has no renderer, no SwapBegin at all
+
+### What was tried (kernel patch 0960 / mute at display-on)
+- `0960-willow-console-mute-at-swap.patch` rewritten as a valid unified diff (the previous
+  version had a hunk header declaring `-1426,7 +1432,19` while carrying 4 old / 20 new lines;
+  `git apply` reported `corrupt patch` and skipped the whole file, so even the `present #`
+  logging was lost). CI run 40548288249: `Applying patch: 0960...` with no error. Verified:
+  mute does NOT fire — `sel 12` is handled by 0079's explicit `case kSweetFBRequestPowerChange`,
+  so an `if (selector == 12)` inside `default:` is unreachable. Do not re-add that hook.
+- A Python pre-build hook cannot work: `build.sh` clones `dxb/xnu` itself, so no source file
+  exists before `bash build.sh`. Removed.
+
+### Rootfs experiment (CI 40553152712, flashed, 485 s)
+- Removed SpringBoard `FBDisableRemoteViewControllers`, `SBDisableRemoteApplications`,
+  `SBForceForceQuitDisabled` (hypothesis: they killed the CAContext round-trip that gets CA a
+  render target). Result: no change — still no `sel 4`, no `present #` (logs 10, 11).
+- `sweetaccel=0` (no IOAcceleratorES stub) with the new rootfs: no change either.
+  QuartzCore still polls `IOAcceleratorES` (350 lines in log10) then `IOAcceleratorESLegacy`.
+
+### Evidence
+- log1 `scratch/sweet-log.txt` (original restored rootfs, kernel 40186601695) is the only log
+  with `sel 4`/`sel 5`/`present #1 mask 0x80000007 ... muted 1` (line 1212). Even there the
+  screen stayed console text, so a swap alone does not produce a visible GUI.
+- logs 2, 8, 9, 10, 11: backboardd issues only 14-15 init selectors, then all threads sit in
+  `mach_msg`; SpringBoard t0 returns the same stack for 7 consecutive samples.
+- `SWEET INTF1: ~310 frames in 5 s` throughout — the vsync timer and MDP scanout are healthy.
+- Only recurring crash: `mobileactivation` sig 5 SIGTRAP (ns 2 code 0x5), every ~5 min.
+
+### Conclusion (observation + inference)
+- The console is a symptom, not the blocker. Nothing ever presents a frame: CoreAnimation has
+  no renderer. `docs/METAL_ADRENO630.md` says CA falls back Metal -> GLES -> software, but with
+  no accelerator accepted and no EAGL implementation installed, nothing composites, so the
+  console remains the only content on the panel. Muting it now would only give a black screen.
+- Muting is therefore deferred until a frame actually presents (present() already mutes).
+
+### Next step (not started)
+- Build the `OpenGLES.framework` replacement (docs/GPU_EAGL.md phases A+B: eagl.m, gl_stubs.c,
+  gl_resolve.c, osm.c over libOSMesa) in CI (macOS runner has Xcode; needs meson/bison + Mesa
+  clone) and install it into the iOSRoot so backboardd/SpringBoard get a GLES renderer.
+- Keep `0960`'s `present #` logging; drop its unreachable mute hunk when convenient.
