@@ -1,17 +1,17 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: x <x@x>
-Subject: sweet: the files the boot payload carries, ready to be installed (SWEET BLOBS)
+Subject: sweet: the files the boot payload carries, installed by a thread that waits for the root
 
 ---
  bsd/conf/files | 1 +
- bsd/kern/sweet_blobs.c | 152 +++++
+ bsd/kern/sweet_blobs.c | 167 +++++
 
 diff --git a/bsd/kern/sweet_blobs.c b/bsd/kern/sweet_blobs.c
 new file mode 100644
-index 0000000..1234571
+index 0000000..1234572
 --- /dev/null
 +++ b/bsd/kern/sweet_blobs.c
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,167 @@
 +/*
 + * SWEET: the files the boot payload carries for the kernel to install.
 + *
@@ -51,7 +51,7 @@ index 0000000..1234571
 +	uint64_t size;
 +};
 +
-+void sweet_install_blobs(void);
++void sweet_start_blobs(void);
 +
 +static const char *sweet_blob_dirs[] = {
 +	"/private/var/tmp",
@@ -80,8 +80,8 @@ index 0000000..1234571
 +	return error;
 +}
 +
-+void
-+sweet_install_blobs(void)
++static void
++sweet_blobs_thread(void *arg __unused, wait_result_t wr __unused)
 +{
 +	DTEntry chosen;
 +	void const *prop = NULL;
@@ -91,22 +91,15 @@ index 0000000..1234571
 +	uint32_t version, count, i;
 +	const char *dir = NULL;
 +	const char *first;
-+	unsigned int on = 1;
-+	static int started;
-+
-+	if (started) {
-+		return;
-+	}
-+	started = 1;
-+	if (PE_parse_boot_argn("sweetblobs", &on, sizeof(on)) && on == 0) {
-+		return;
-+	}
-+
-+	/* the caller is a process context with the root mounted; give the vnode a moment if not */
-+	for (int tries = 0; tries < 30 && rootvnode == NULLVP; tries++) {
++	/* started from the framebuffer, before the root is mounted: wait for it, then let it settle */
++	for (int tries = 0; tries < 1200 && rootvnode == NULLVP; tries++) {
 +		delay(100 * 1000);
 +	}
 +	printf("SWEET BLOBS: install, root %s\n", rootvnode != NULLVP ? "is up" : "is missing");
++	if (rootvnode == NULLVP) {
++		return;
++	}
++	delay(3 * 1000 * 1000);
 +
 +	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
 +	    SecureDTGetProperty(chosen, SWEET_BLOBS_PROP, &prop, &size) != kSuccess) {
@@ -164,6 +157,28 @@ index 0000000..1234571
 +	(void)first;
 +}
 +
++/* called from AppleCLCD::start, long before vfs_mountroot */
++void
++sweet_start_blobs(void)
++{
++	unsigned int on = 1;
++	thread_t thread;
++	static int started;
++
++	if (started) {
++		return;
++	}
++	started = 1;
++	if (PE_parse_boot_argn("sweetblobs", &on, sizeof(on)) && on == 0) {
++		return;
++	}
++	printf("SWEET BLOBS: a thread waits for the root\n");
++	if (kernel_thread_start(sweet_blobs_thread, NULL, &thread) != KERN_SUCCESS) {
++		printf("SWEET BLOBS: no thread\n");
++		return;
++	}
++	thread_deallocate(thread);
++}
 diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
