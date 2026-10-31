@@ -887,3 +887,41 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 ### 2. Sestavené artefakty (`gui16`)
 - [`xnu/out/payload-gui16.bin`](xnu/out/payload-gui16.bin) (`31,064,000` B) s boot-args `sweetfb_hz=60 sweettouch=1 sweettouchdelay=1`.
 - [`shim/out/shim-evox-boot-gui16.img`](shim/out/shim-evox-boot-gui16.img) (`31,363,072` B).
+
+## 2026-10-31: Root Cause Analysis of Crash in gui16 & Fix in gui17
+
+### 1. Root Cause of panic(cpu 2): Unhandled implementation specific error in gui16
+1. **Fotografie displeje uzivatele (media_1793482264087_651f2307.jpg)**:
+   - V gui16 s sweettouchdelay=1 vlakno dotyku po 1 s provedlo inicializaci TLMM a havarovalo:
+     SWEET TOUCH: mapping GCC/TLMM/SE2
+     SWEET TOUCH: gcc vote=0x5be0 rcg=0 cfg=0x100000 cbcr=0x4220
+     SWEET TOUCH: se2 fw=0x101 proto=1 status=0 tx=0x20102864 rx=0x20104800 ios=0
+     SWEET TOUCH: packing tx=0x7f8fe/0xffefe rx=0x7f8fe/0xffefe gran=0
+     SWEET TOUCH: TLMM reset=0 irq=0 avdd=0
+     panic(cpu 2 caller 0xfffffe0007b8d864): Unhandled implementation specific error
+2. **Presna disasemblace a pricina padu (Register deduplication bug)**:
+   - V gui15 byla snaha zvetsit mapovani st.west z 0x58000 na 0x100000 (1 MiB).
+   - Instrukce na offsetech 0x53037c a 0x53038c v xnu/out/kernel.development.sweet nastavovaly registr w20:
+     - Puvodne: mov w20, #0x8000; movk w20, #5, lsl #16 (0x58000).
+     - Upraveno v gui15 na: mov w20, #0; movk w20, #0x10, lsl #16 (0x100000).
+   - **Kriticke zjisteni**: Kompilator Clang deduplikoval konstantu 0x58000. Registr w20 byl pouzit NEJEN pro velikost ml_io_map(TOUCH_WEST_PA, size), ale byl v cele funkci drzen jako fixni offset pro TOUCH_GPIO_CFG(WILLOW_PIN_IRQ) (88 * 0x1000 = 0x58000)!
+   - Na offsetu 0x530b0c (touch_gpio(WILLOW_PIN_IRQ)):
+     - ldr w8, [x9, x20] a str w8, [x9, x20] (kde x9 = st.west).
+   - Protoze x20 byl zmenen na 0x100000, jadro pristoupilo na virtualni adresu st.west + 0x100000 - presne na prvni neplatny bajt za koncem 1 MiB mapovani!
+   - To okamzite vyvolalo hardwarovy data abort / SError na CPU 2.
+
+### 2. Opravy aplikovane v shim/out/shim-evox-boot-gui17.img
+1. **Oprava xnu/out/kernel.development.sweet**:
+   - 0x53037c: obnoveno 14 00 90 52 (mov w20, #0x8000).
+   - 0x53038c: obnoveno b4 00 a0 72 (movk w20, #5, lsl #16).
+     -> w20 zustava 0x58000 pro vsechny pristupy k pinum GPIO 88 a GPIO 87!
+   - 0x530428: zmeneno e1 03 14 aa (mov x1, x20) na 01 02 a0 52 (mov w1, #0x100000).
+     -> ml_io_map(TOUCH_WEST_PA, 0x100000) nyni dostava explicitnich 1 MiB v argumentu x1, aniz by se menil registr w20!
+2. **Prehozena tlacitka hlasitosti**:
+   - V gui15 byla v tabulce prohozena ([0x30, 0xea, 0xe9, 0x40]), ale kvuli okamzitemu padu jadra na 1. sekunde se uzivatel k otestovani nedostal. V gui17 pobezi system plynule a tlacitka budou spravne orientovana.
+3. **Plynulost systemu**:
+   - sweetfb_hz=60 pro plnych 60 FPS.
+   - sweettouchdelay=5 pro hladky start bez startovaci spicky demonu.
+4. **Sestavene artefakty (gui17)**:
+   - xnu/out/payload-gui17.bin (31,064,000 B).
+   - shim/out/shim-evox-boot-gui17.img (31,363,072 B).
