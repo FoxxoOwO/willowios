@@ -54,10 +54,10 @@ topaz_gl_path(void)
  * are this iOS 16.7.16 cache's.)
  */
 #define CACHE_BASE              0x180000000UL
-#define VT_GLES_CONTEXT         0x1d5b2f6e8UL   /* vtable for CA::OGL::GLESContext */
+#define VT_GLES_CONTEXT         0x1d5b2b6e8UL   /* vtable for CA::OGL::GLESContext */
 #define VSLOT(vtable, offset)   ((vtable) + 0x10 + (offset))
-#define FN_FUNCTION_SUPPORTED   0x1884b2164UL   /* CA::OGL::GLContext::function_supported() const */
-#define FN_FUNCTION_UNIFORM     0x1884b21acUL   /* CA::OGL::GLContext::function_uniform(unsigned, unsigned long, unsigned long, float const*) */
+#define FN_FUNCTION_SUPPORTED   0x1884ae164UL   /* CA::OGL::GLContext::function_supported() const */
+#define FN_FUNCTION_UNIFORM     0x1884ae1acUL   /* CA::OGL::GLContext::function_uniform(unsigned, unsigned long, unsigned long, float const*) */
 
 static uintptr_t slide;
 

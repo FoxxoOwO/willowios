@@ -613,6 +613,31 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 - Recalculated all 13 SHA-256 page hashes in `LC_CODE_SIGNATURE` `CodeDirectory`.
 - Built [`xnu/out/payload-gui7.bin`](xnu/out/payload-gui7.bin) (`31,064,000` B) and [`shim/out/shim-evox-boot-gui7.img`](shim/out/shim-evox-boot-gui7.img) (`31,367,168` B).
 
+## 2026-10-31: MILESTONE — Native iOS 16 Lock Screen Running on Xiaomi Redmi Note 8T (`gui7`) & Speed / Red Veil Fixes (`gui8`)
+
+### 1. Hardware Confirmation (`gui7.img`)
+- User booted [`shim/out/shim-evox-boot-gui7.img`](shim/out/shim-evox-boot-gui7.img) and confirmed the **full native iOS 16 Lock Screen (`SpringBoard` + `backboardd` + `PosterBoard`) rendered on the Xiaomi Redmi Note 8T (`willow`) display** (`"100% Charged"`, `"4:28"` clock, status bar battery charging indicator, camera quick-action button).
+
+### 2. Red Veil (`vibrantColorMatrix`) & Boot Speed Fixes in `shim/out/shim-evox-boot-gui8.img`
+- **Red Veil Fix (`CA::OGL::GLESContext` vtable in `20H392`)**:
+  - In `sweet-log25.txt`, `backboardd` reported:
+    ```
+    topaz-gl: function_supported: slot holds 0x1883b040c, expected 0x1884b2164: left alone
+    topaz-gl: function_uniform: slot holds 0x18833f9dc, expected 0x1884b21ac: left alone
+    ```
+  - Located the exact `CA::OGL::GLESContext` vtable in our `20H392` `dyld_shared_cache_arm64` (shifted by `-0x4000` relative to `topaz`'s build):
+    - `VT_GLES_CONTEXT = 0x1d5b2b6e8` (`slot +0x378 = 0x1d5b2ba70`, `slot +0x388 = 0x1d5b2ba80`)
+    - `FN_FUNCTION_SUPPORTED = 0x1884ae164`
+    - `FN_FUNCTION_UNIFORM = 0x1884ae1ac`
+  - Patched both [`userland/gpu/topaz_inject.c`](userland/gpu/topaz_inject.c) and [`scratch/patch_inject.py`](scratch/patch_inject.py) (`0x438c..0x440c`) and recalculated all 13 SHA-256 page hashes in [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib).
+- **Boot Speed & Responsiveness Optimizations (`gui8.img`)**:
+  1. **`cpus=4`**: Enabled all 4 Kryo 260 Gold cores (`0x100..0x103`, 2016 MHz, 16K page granular support, GICR prepared by `gold_gicr_prepare()` in [`shim/shim.c`](shim/shim.c)) instead of `cpus=2`.
+  2. **Slim `blobs.bin` (`70 KB` instead of `13.6 MB`)**: Since `libOSMesa.8.dylib` (`13.2 MB`) and `libtopaz-gl.dylib` (`346 KB`) are already persisted in `/private/var/tmp/` on the HFS+ `userdata` partition, [`scratch/blobs-fast.bin`](scratch/blobs-fast.bin) packages only the updated [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib) (`70,608` B), eliminating `26,436` single-sector eMMC `CMD24` writes on every boot and shrinking [`shim/out/shim-evox-boot-gui8.img`](shim/out/shim-evox-boot-gui8.img) from `31.4 MB` to `17.8 MB`.
+  3. **Disabled Heavy Kernel Diagnostic Samplers**: Set `sweetiolog=- sweetsample=- sweetnull=- sweetscan=-` and removed `glframes=1 sweethidtest=5` so the kernel no longer locks `SpringBoard`/`backboardd` tasks every 2 minutes or serializes IOKit dictionaries on every lookup.
+- **Next Hardware Acceleration Step (Adreno 610 `freedreno`)**:
+  - `willow` (`SM6125`) uses the exact same Adreno 610 GPU (`chipid = 0x06010000`, `GPU_BASE = 0x05900000`, `GPUCC = 0x05990000`, `SMMU = 0x059a0000`) as `topaz`, with signed `willow` zap shader firmware already in [`firmware/willow/`](firmware/willow/) (`gpu_region` at `0x57515000`).
+
+
 
 
 
