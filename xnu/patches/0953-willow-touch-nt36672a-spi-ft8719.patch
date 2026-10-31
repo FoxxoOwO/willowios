@@ -197,7 +197,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_wr(st.se, 0x22c, 0);                /* SE_SPI_LOOPBACK = 0 */
 +		touch_wr(st.se, 0x230, 0);                /* SE_SPI_CPOL = 0 */
 +		touch_wr(st.se, 0x250, 0);                /* SE_SPI_DEMUX_SEL = CS0 */
-+		touch_wr(st.se, 0x268, 7);                /* SE_SPI_WORD_LEN = 8-bit */
++		touch_wr(st.se, 0x268, 4);                /* SE_SPI_WORD_LEN = 8-bit (8 - MIN_WORD_LEN=4) */
 +	} else {
 +		touch_wr(st.se, SE_MCLK, (2u << 4) | 1u);
 +		touch_wr(st.se, SE_SCL, (5u << 20) | (11u << 10) | 22u); /* 400 kHz */
@@ -214,8 +214,8 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		st.irq_pin = WILLOW_PIN_IRQ;
 +		touch_gpio(WILLOW_PIN_IRQ, 0, 3, 3, false, false);
 +		touch_gpio(6, 1, 0, 3, false, false);                   /* SPI MISO */
-+		touch_gpio(7, 1, 0, 3, false, false);                   /* SPI MOSI */
-+		touch_gpio(8, 1, 0, 3, false, false);                   /* SPI SCLK */
++		touch_gpio(7, 1, 0, 3, true, false);                    /* SPI MOSI */
++		touch_gpio(8, 1, 0, 3, true, false);                    /* SPI SCLK */
 +		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);         /* SPI CS0 high */
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);
 +		touch_wait(20);

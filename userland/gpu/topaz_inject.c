@@ -369,6 +369,11 @@ topaz_inject(void)
 		while (1) { usleep(100000); }
 		return;
 	}
+	if (name != NULL && strcmp(name, "bluetoothd") == 0) {
+		log_console("topaz-inject: neutralized bluetoothd (sleeping)\n");
+		while (1) { usleep(100000); }
+		return;
+	}
 	if (name != NULL && strcmp(name, "ReportCrash") == 0) {
 		log_console("topaz-inject: neutralized ReportCrash (exit 0)\n");
 		exit(0);

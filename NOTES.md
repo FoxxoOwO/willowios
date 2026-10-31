@@ -925,3 +925,48 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 4. **Sestavene artefakty (gui17)**:
    - xnu/out/payload-gui17.bin (31,064,000 B).
    - shim/out/shim-evox-boot-gui17.img (31,363,072 B).
+
+## 2026-10-31: Analysis of `sweet-log-gui17.txt` & Hardware SPI Output Fix + bluetoothd Neutralization (`gui18`)
+
+### 1. Výsledky a zjištění z logu `gui17` (`sweet-log-gui17.txt`, 2 373 řádků, flush #40)
+1. **Systém běží stabilně bez paniku**:
+   - Oprava deduplikace registru `w20` v `sweet_touch` na offsetu `0x530428` 100% zafungovala.
+   - Vlákno dotyku naběhlo bez chyby paměťového mapování TLMM WEST.
+2. **Tlačítka hlasitosti 100% potvrzena a funkční**:
+   - `key 1` (PMIC GPIO / Vol-) posílá `kHIDUsage_Csmr_VolumeDecrement` (`0xea`).
+   - `key 2` (PMIC RESIN / Vol+) posílá `kHIDUsage_Csmr_VolumeIncrement` (`0xe9`).
+   - `key 0` (Power) posílá `kHIDUsage_Csmr_Power` (`0x30`).
+3. **Příčina nefunkčního dotyku (`err=60` / `ETIMEDOUT`)**:
+   - V `sweet-log-gui17.txt`: `SWEET TOUCH: willow SPI Novatek trim err=60 00:00:00:00:00:00` a `report err=60 irq=0x1c000081`.
+   - Identifikovány 2 kritické hardwarové chyby v konfiguraci SPI v jádře:
+     a) **TLMM Output Enable (`OE`) pro piny MOSI a SCLK byl vypnut**:
+        - V `bsd/dev/sweet_touch.c` bylo voláno:
+          `touch_gpio(7, 1, 0, 3, false, false); /* SPI MOSI */`
+          `touch_gpio(8, 1, 0, 3, false, false); /* SPI SCLK */`
+        - Pátý argument `out = false` nuloval bit 9 (`OE`) v registru TLMM `GPIO_CFG`. Piny MOSI i SCLK tak zůstaly v třístavovém/vstupním režimu (`0xc4`) místo výstupního (`0x2c4`), takže žádný hodinový ani datový signál fyzicky neopustil čip SoC směrem k dotykovému řadiči Novatek NT36672A!
+     b) **Chybná hodnota `SE_SPI_WORD_LEN` (`0x268`)**:
+        - V `touch_se_init()` bylo zapsáno `touch_wr(st.se, 0x268, 7)`.
+        - Podle Qualcomm GENI SPI specifikace (`spi-geni-qcom.c`) se do registru zapisuje `bits_per_word - 4`. Pro 8bitové SPI slovo je správná hodnota `8 - 4 = 4`! Hodnota 7 znamenala 11 bitů na slovo, což deformovalo rámce.
+4. **Příčina přetrvávající pomalosti systému**:
+   - V logu se každé 2 sekundy neustále opakoval pád a restart démona Bluetooth:
+     `exec bluetoothd` (25× za běh logu).
+   - `bluetoothd` v Darwinu nemá na willow funkční transport HCI, ihned havaroval a launchd jej okamžitě znovu spouštěl, což generovalo neustálou zátěž CPU a kontextových přepnutí.
+
+### 2. Provedené opravy v [`shim/out/shim-evox-boot-gui18.img`](shim/out/shim-evox-boot-gui18.img)
+1. **Oprava TLMM a SPI řadiče v [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet)**:
+   - `0x530838`: `ea 00 80 52` (`mov w10, #7`) -> `8a 00 80 52` (`mov w10, #4`), oprava `SE_SPI_WORD_LEN` na 8 bitů.
+   - `0x530b00`: `01 48 88 52` (`mov w1, #0x4240`) -> `8c 58 80 52` (`mov w12, #0x2c4`), načtení výstupní TLMM masky s povoleným `OE` (`0x2c4`).
+   - `0x530b1c`: `e1 01 a0 72` (`movk w1, #0xf, lsl #16`) -> `1f 20 03 d5` (`nop`).
+   - `0x530b60`: `6a 25 00 33` -> `8a 25 00 33` (`bfxil w10, w12, #0, #0xa`), GPIO 7 (MOSI) nastaven na `mux=1`, `OE=1` (výstup).
+   - `0x530b80`: `6a 25 00 33` -> `8a 25 00 33` (`bfxil w10, w12, #0, #0xa`), GPIO 8 (SCLK) nastaven na `mux=1`, `OE=1` (výstup).
+   - Aktualizován zdrojový patch [`xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`](xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch).
+2. **Neutralizace `bluetoothd` v [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib)**:
+   - V [`userland/gpu/topaz_inject.c`](userland/gpu/topaz_inject.c) a [`scratch/patch_inject.py`](scratch/patch_inject.py) přidána detekce `bluetoothd`:
+     - Vypíše `topaz-inject: neutralized bluetoothd (sleeping)` a přejde do nekonečného spánku (0% CPU, 0 pádů).
+   - Pomocné stuby (`FN_RET_ONE`, `FN_RET_ZERO`, `FN_SB_LOCKDOWN`, `FN_SB_SETUP`) přesunuty do volné oblasti od `0x5400`, čímž dispečer získal dostatek prostoru.
+   - Přepočteny SHA256 hashe stránek v CodeDirectory (`LC_CODE_SIGNATURE`).
+   - Znovuzabaleny soubory do [`scratch/blobs-full.bin`](scratch/blobs-full.bin) a vložen do [`xnu/out/willow.adt`](xnu/out/willow.adt).
+   - Do boot-args v cmdline přidán `bluetoothd` do seznamu `topaz_inject`.
+3. **Sestavené artefakty (`gui18`)**:
+   - [`xnu/out/payload-gui18.bin`](xnu/out/payload-gui18.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui18.img`](shim/out/shim-evox-boot-gui18.img) (`31,363,072` B).
