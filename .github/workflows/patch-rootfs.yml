@@ -174,14 +174,28 @@ jobs:
           ls -lh iOSRoot-patched.simg
           df -h .
 
-      - name: Compress patched sparse image
+      # The image is ~5 GB compressed and the Actions artifact storage is what the quota counts;
+      # release assets are not. Split into parts under the 2 GiB per-asset limit, joined after the
+      # download with: cat iOSRoot-patched.simg.tar.gz.part-* > iOSRoot-patched.simg.tar.gz
+      - name: Split the image
         run: |
-          tar -czf iOSRoot-patched.simg.tar.gz iOSRoot-patched.simg
-          ls -lh iOSRoot-patched.simg.tar.gz
+          rm -f iOSRoot-patched.simg.tar.gz
+          split -b 1800m -d --numeric-suffixes=1 --suffix-length=2 \
+            iOSRoot-patched.simg iOSRoot-patched.simg.part-
+          shasum -a 256 iOSRoot-patched.simg > iOSRoot-patched.simg.sha256
+          ls -lh iOSRoot-patched.simg.part-* iOSRoot-patched.simg.sha256
 
-      - name: Upload patched artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: iOSRoot-patched
-          path: iOSRoot-patched.simg.tar.gz
-          retention-days: 7
+      - name: Publish (release rootfs-latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=rootfs-latest
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "Patched iOS root image (latest)" \
+              --notes "iOSRoot-patched.simg split into parts; cat the parts back together and flash with fastboot flash userdata -S 512M"
+          # drop the parts of the previous build so that they cannot be mixed up
+          gh release view "$TAG" --json assets --jq '.assets[].name' | \
+            while read -r name; do gh release delete-asset "$TAG" "$name" --yes; done
+          gh release upload "$TAG" iOSRoot-patched.simg.part-* iOSRoot-patched.simg.sha256 --clobber
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size) B"'
+

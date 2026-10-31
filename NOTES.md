@@ -408,3 +408,99 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
   gl_resolve.c, osm.c over libOSMesa) in CI (macOS runner has Xcode; needs meson/bison + Mesa
   clone) and install it into the iOSRoot so backboardd/SpringBoard get a GLES renderer.
 - Keep `0960`'s `present #` logging; drop its unreachable mute hunk when convenient.
+
+## 2026-10-31: Root Cause of `blobs6` splash freeze identified & fixed
+
+### Investigation & Log Analysis (sweet-log15.txt, flush #35)
+- Verified `mute12.img` baseline: 2 Gold CPUs active (2016 MHz), eMMC 5.1 SDHCI stable, HFS+ `userdata` cleanly mounted, full iOS 16 userland alive (`launchd`, `SpringBoard`, `backboardd`, `locationd`, `sharingd`, etc.).
+- Confirmed GUI blocker: `topaz: backboardd starts without DYLD_INSERT_LIBRARIES` followed by hundreds of `IOK backboardd: matching1 ... IOAcceleratorES` queries. CoreAnimation has no graphics renderer.
+
+### Root Cause of `blobs6.img` Freeze on Redmi Splash
+- **Discovery**: In `tools/mkglboot.sh` line 36, `pack_evox_boot.py` was called with `shim/out/shim-boot.img` instead of `shim/out/Image`.
+- **Mechanism**: `pack_evox_boot.py` compressed the entire Android boot image inside another boot image (`kp` size was 514,272 B instead of 294,498 B).
+- When ABL decompressed `kp` at `0x40080000`, the image began with `ANDROID!` and zeros at offset 0x38 instead of the Linux ARM64 magic `ARM\x64`.
+- ABL's kernel header validation (`0x12e88..0x12eac`) failed and aborted before branching to `_start`. The phone froze on the splash screen without executing any code.
+
+### Fix & Verification
+- Fixed `tools/mkglboot.sh` to pass `shim/out/Image`.
+- Generated `shim/out/shim-evox-boot-blobs-fixed.img`:
+  - `kp = 294498` bytes (matches `mute12` exact size).
+  - Decompressed header verified: `b _start` at 0x0, `ARM\x64` at offset 0x38.
+  - Ramdisk: 31,060,528 bytes (`payload-gl.bin` with kernel CI 40761394847, patches 0962+0963, ADT `topaz-blobs`).
+  - Cmdline: includes `topaz_inject=/private/var/tmp/libtopaz-inject.dylib,backboardd gl=force`.
+
+## 2026-10-31: GL Milestone achieved & Mach IPC Deadlock Analysis (sweet-log17.txt)
+
+### Milestones Achieved
+1. **Dylibs on Filesystem**: Kernel thread `sweet_blobs` successfully installed all 3 dylibs from ADT into `/private/var/tmp/`:
+   - `/private/var/tmp/libtopaz-gl.dylib` (346,864 B)
+   - `/private/var/tmp/libtopaz-inject.dylib` (70,448 B)
+   - `/private/var/tmp/libOSMesa.8.dylib` (13,188,272 B)
+2. **GL Injection & CoreAnimation GLES Context**:
+   - `backboardd` started with `DYLD_INSERT_LIBRARIES=/private/var/tmp/libtopaz-inject.dylib`.
+   - All 7 of 7 `EAGLContext` methods successfully replaced.
+   - CoreAnimation created its off-screen OpenGL ES 3.1 context via Mesa softpipe:
+     `OpenGL ES 3.1 Mesa 25.0.7; softpipe; shaders OpenGL ES GLSL ES 3.10`!
+   - QuartzCore queried GLES capabilities (`0x1f03`, `0x8872`, `0xd33`, `0xd3a`, `0xd50` GL_MAX_SAMPLES=4).
+
+### Deadlock Analysis & LaunchServices Investigation (sweet-log18)
+- **Symptom**: Phone stayed on kernel console text for 20 minutes without presenting a frame (`sel 4`/`sel 5` absent).
+- **Static Dyld Cache Analysis**:
+  - `0x1811a46e0`: `-[NSXPCConnection _sendInvocation:orArguments:count:methodSignature:selector:withProxy:]` in `Foundation.framework`
+  - `0x181cb6238`: `-[... getServerStoreBlockingWithCompletionHandler:]` in `CoreServices.framework` (LaunchServices client)
+  - Both `backboardd` (t11) and `SpringBoard` (t0, t1) are synchronously blocked waiting on `lsd` (LaunchServices Daemon).
+- **Root Cause**:
+  - `lsd` runs with an empty database on fresh HFS+ rootfs (`/private/var/db/lsd` is empty).
+  - On launch, `lsd` queries `containermanagerd` for installed containers/bundles.
+  - `containermanagerd` repeatedly queries the user manager for personas (`+[MCMUserIdentityCache personasAreSupported]`), which do not exist on this embedded single-user port, hanging container registration and completely stalling `lsd`.
+  - In `sweet-log18`, `topaz_inject` boot-arg only specified `backboardd`, so `containermanagerd` never received the `libtopaz-inject.dylib` hook.
+  - Furthermore, `topaz_inject.c` had a hardcoded address `0x1c4c699f8` for `personasAreSupported`, whereas in the iOS 16.7.16 20H392 cache the function starts at `0x1c4c69904`, which would have caused the address check `b.ne` to fail and abort the patch.
+
+### Breakthrough: Frame 1 Presented & Full iOS Userland Reached (sweet-log19)
+- **Log Metrics**: 286,919 bytes, 5,279 lines.
+- **Milestone Reached**:
+  - `containermanagerd` personas fix allowed `lsd` to complete container registration.
+  - Mach IPC deadlock between `SpringBoard` and `backboardd` was completely eliminated.
+  - **`SWEET FB: present #1 mask 0x80000007 consShown 0 paused 0 muted 0`** FIRED!
+  - CoreAnimation successfully rendered the first iOS GUI frame through Mesa OSMesa 25.0.7 OpenGL ES 3.1 softpipe.
+  - `SpringBoard` launched full iOS userland:
+    - `budd` (Apple Setup Assistant / "Hello" screen) launched.
+    - System widget extensions launched (`BatteriesWidget`, `ScreenTimeWidget`, `PhotosReliveWidget`, `SleepWidget`, `LockScreenPeopleWidget`, `AppStoreWidgets`).
+    - `mobileactivationd` launched.
+    - `SweetHIDTouch` opened by backboardd.
+- **Root Cause of Text Console Remaining on Screen**:
+  - `present #1` contained 3 layers (`mask 0x80000007`), which is normal for initial iOS lockscreen/buddy scenes.
+  - In `AppleCLCD::present(rec)` in the kernel, the code block setting `sweet_console_muted = 1` was guarded by `if (directPresent(rec))`. Because multi-layer frames require the copy/composition path, `directPresent` returned 0, completely bypassing the console mute logic!
+  - As a result, `sweet_console_muted` stayed `0`. Every subsequent kernel log message (over 3,000 lines of extension check-in timeouts and daemon spawns) was rendered by `video_console` character-by-character directly into `0x5c000000`, continuously overwriting the rendered GUI frame!
+- **Fix Applied**:
+  - Patched `AppleCLCD::present` in `xnu/out/kernel.development.sweet`: unconditionally sets `sweet_console_muted = 1` and `fConsolePaused = 1` for both the direct and multi-layer composition paths.
+  - Rebuilt `xnu/out/payload-personas2.bin` and wrapped in `shim/out/shim-evox-boot-gui1.img`.
+
+## 2026-10-31: GUI Analysis (sweet-log20 / sweet-log21) & Fix for Screen Overwrite (gui2)
+
+### Log Metrics & Observations (sweet-log20.txt, flush #89, 138,007 B)
+- Boot of `shim-evox-boot-gui1.img`:
+  - `sweet-log20.txt` and `sweet-log21.txt` are identical (flush #89).
+  - In `gui1.img`, `AppleCLCD::present` logged:
+    `SWEET FB: present #1 mask 0x80000007 consShown 0 paused 0 muted 0`
+  - All 3 layers (mask 0x7) had surface ID = 0, meaning no surface copy was done to `fPixels` on that initial frame.
+  - Userland requested display power off (selector 12, arg 0: `SWEET FB: display off ignored (sweetfb_stayon)`).
+  - `SweetHIDButtons` registered with `test every 0 s` because `sweethidtest` was absent in cmdline.
+  - Without Home/Power key event, iOS Setup Assistant (`budd`) and SpringBoard remained asleep/idle after presenting the initial frame.
+  - Meanwhile, because the early console text in `0x5c000000` was never cleared and `sweet_console_muted` was 0, the screen kept displaying the early boot text console.
+
+### Fixes Applied in `shim-evox-boot-gui2.img`
+1. **Zeroing Framebuffer on First Present**:
+   - Patched `AppleCLCD::present` at VA `0xfffffe0007b12ff8` (file offset `0xb0eff8`) in [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet):
+     When `present_logged == 1`, loops over `fPixels` (`0x5c000000`) for 10,108,800 bytes (1080×2340×4) zeroing it out with `stp xzr, xzr, [x1], #16`.
+     This wipes all leftover early boot console text to solid black upon the first frame presentation.
+2. **Unconditional Console Muting**:
+   - Both direct and multi-layer paths set `sweet_console_muted = 1` and `fConsolePaused = 1`.
+3. **Simulated Home Key & Frame Logging in Boot-Args**:
+   - Added `sweethidtest=5` to boot-args: fires Home key event every 5 seconds to wake up SpringBoard / Setup Assistant.
+   - Added `glframes=1` to boot-args: logs each rendered frame in `eagl.c` (`redwood-gl: f N ...`).
+4. **Boot Artifacts Built**:
+   - [`xnu/out/payload-gui2.bin`](xnu/out/payload-gui2.bin) (31,060,528 B).
+   - [`shim/out/shim-evox-boot-gui2.img`](shim/out/shim-evox-boot-gui2.img) (31,363,072 B).
+   - Updated [`tools/mkglboot.sh`](tools/mkglboot.sh) with `sweethidtest=5 glframes=1`.
+

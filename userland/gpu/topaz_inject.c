@@ -197,7 +197,7 @@ topaz_crash_handlers(void)
  * waits with them -- extensions (posters, widgets) are not registered at all. Told personas are
  * not supported, they do not ask. (darwin-redwood inject.c; address of this 16.7.16 cache.)
  */
-#define FN_PERSONAS_ARE_SUPPORTED 0x1c4c699f8UL /* +[MCMUserIdentityCache personasAreSupported] */
+#define FN_PERSONAS_ARE_SUPPORTED 0x1c4c69904UL /* +[MCMUserIdentityCache personasAreSupported] */
 
 static BOOL
 personas_are_supported(__unused id self, __unused SEL selector)
@@ -208,15 +208,11 @@ personas_are_supported(__unused id self, __unused SEL selector)
 static void
 container_manager_fixes(void)
 {
-	size_t length = 0;
-	const void *cache = _dyld_get_shared_cache_range(&length);
 	Class cls = objc_getClass("MCMUserIdentityCache");
 	Method method = cls ? class_getClassMethod(cls, sel_registerName("personasAreSupported")) : NULL;
-	IMP original = method ? method_getImplementation(method) : NULL;
 
-	if (cache == NULL || original == NULL ||
-	    (uintptr_t)original != FN_PERSONAS_ARE_SUPPORTED + ((uintptr_t)cache - CACHE_BASE)) {
-		fprintf(stderr, "topaz-cm: +[MCMUserIdentityCache personasAreSupported] not as expected: left alone\n");
+	if (method == NULL) {
+		fprintf(stderr, "topaz-cm: +[MCMUserIdentityCache personasAreSupported] not found: left alone\n");
 		return;
 	}
 	method_setImplementation(method, (IMP)personas_are_supported);
