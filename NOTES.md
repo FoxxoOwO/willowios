@@ -667,6 +667,33 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 3. **Throttled Framebuffer Copy (`sweetfb_hz=20`)**:
    - Built [`xnu/out/payload-gui9.bin`](xnu/out/payload-gui9.bin) (`17,528,624` B) and [`shim/out/shim-evox-boot-gui9.img`](shim/out/shim-evox-boot-gui9.img) (`17,829,888` B).
 
+## 2026-10-31: Analysis of `gui9` Panic (`Unhandled implementation specific error` on CPU 2) & GPU Enablement (`gui10`)
+
+### 1. Root Cause of `gui9` Crash
+- **Panic on CPU 2**:
+  ```text
+  SWEET TOUCH: mapping GCC/TLMM/SE2
+  SWEET TOUCH: gcc vote=0x5be0 rcg=0 cfg=0x100000 cbcr=0x4220
+  SWEET TOUCH: se2 fw=0x101 proto=1 status=0 tx=0x20102864 rx=0x20104800 ios=0
+  SWEET TOUCH: packing tx=0x7f8fe/0xffefe rx=0x7f8fe/0xffefe gran=0
+  SWEET TOUCH: TLMM reset=0 irq=0 avdd=0
+  panic(cpu 2 caller 0xfffffe0007b8d864): Unhandled implementation specific error
+  ```
+- **Why**:
+  1. The `sweettouch` thread woke up at 5 s on `cpu 2` (`sweettouchdelay=5`) and called `touch_nvt_set_page()` -> `touch_spi_xfer()`, writing to `SE_CMD` (`0x38000000` = `SPI_FULL_DUPLEX`).
+  2. Because QUP0 SE2 clocks were unvoted (`rcg=0`, `cbcr=0x4220` with clock gated), the Qualcomm interconnect bus raised an asynchronous `SError` / implementation-specific exception when the unclocked core received a command.
+  3. Additionally, in `gui9`, `mkpayload.py` was invoked with `--ramdisk` instead of embedding blobs via `mkadt.py --blobs`, resulting in `SWEET BLOBS: /chosen has no topaz-blobs`.
+
+### 2. Fixes & GPU Activation in [`shim/out/shim-evox-boot-gui10.img`](shim/out/shim-evox-boot-gui10.img)
+1. **Disabled Unclocked SPI Touch Probing (`sweettouch=0`)**:
+   - Prevented the `sweettouch` thread from issuing commands to the unclocked SE2 bus, eliminating the CPU 2 SError panic.
+2. **Proper `topaz-blobs` in ADT (`mkadt.py --blobs scratch/blobs-fast.bin`)**:
+   - Regenerated [`xnu/out/willow.adt`](xnu/out/willow.adt) (`81,188` B) with `topaz-blobs` and complete `/product` identity node.
+3. **Enabled Adreno 610 GPU Hardware Acceleration (`gpu=1 gpu_mhz=600`)**:
+   - `SM6125` Adreno 610 hardware blocks mapped at `0x05900000` (KGSL 3D core), `0x05990000` (GPUCC clock controller), `0x059a0000` (SMMU), and fallback DDR pool at `0x64000000..0x7c000000`.
+   - Boot-args: `gpu=1 gpu_mhz=600 sweetfb_hz=20 sweettouch=0`.
+   - Built [`xnu/out/payload-gui10.bin`](xnu/out/payload-gui10.bin) (`17,528,576` B) and [`shim/out/shim-evox-boot-gui10.img`](shim/out/shim-evox-boot-gui10.img) (`17,829,888` B).
+
 
 
 
