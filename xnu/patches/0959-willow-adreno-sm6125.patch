@@ -1,0 +1,48 @@
+From e51a23bf9d47c617b0d744955b9187317d7a12b3 Mon Sep 17 00:00:00 2001
+From: Antigravity <antigravity@google.com>
+Date: Sat, 31 Oct 2026 20:22:00 +0100
+Subject: [PATCH 959/959] willow: Adreno 610 SM6125 GCC bus clocks, zap region
+ 0x57515000 and skip PIL_SHUTDOWN
+
+- Update GCC GPU interconnect bus clocks for SM6125 (trinket):
+  gcc_gpu_memnoc_gfx at 0x7100c (was 0x3600c on topaz SM6225),
+  gcc_gpu_snoc_dvm_gfx at 0x71018 (was 0x36018 on topaz SM6225).
+- Update ZAP_REGION carveout from 0x55B15000 (topaz) to 0x57515000 (willow).
+- Skip PIL_SHUTDOWN before PIL_INIT_IMAGE: unbooted GPU in reset state
+  causes TrustZone SCM to hang on shutdown; branch directly to PIL_INIT_IMAGE.
+---
+ iokit/Kernel/arm/TopazAdreno.cpp | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index e4fc8a2..5751000 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -108,7 +108,7 @@
+ #define GCC_SIZE            0x80000
+ 
+-#define ZAP_REGION          0x55B15000ull
++#define ZAP_REGION          0x57515000ull
+ #define ZAP_REGION_SIZE     0x2000
+ 
+@@ -333,7 +333,7 @@ zap_load(void)
+ 		memcpy(meta.va, mdt, mdt_size);
+ 		sweet_dcache_clean((vm_offset_t)meta.va, (unsigned)mdt_size);
+ 		__asm__ volatile ("dsb sy" ::: "memory");
+-		scm(SCM_FN(SCM_SVC_PIL, PIL_SHUTDOWN), 1, GPU_PAS_ID, 0, 0, &res);
++		/* willow: skip PIL_SHUTDOWN before PIL_INIT_IMAGE */
+ 		st = scm(SCM_FN(SCM_SVC_PIL, PIL_INIT_IMAGE), 2 | (SCM_ARG_RW << 6), GPU_PAS_ID, meta.pa, 0, &res);
+ 		if (st != 0 || res != 0) {
+ 			IOLog("TopazGPU: zap init_image: %llx/%llx\n", st, res);
+@@ -1611,8 +1611,8 @@ power_up(void)
+ 	rmw(gcc, 0x79004, 0, 1u << 15);                 /* GPLL0 to the GPU CC */
+ 	branch_on(gcc, 0x71154, "gcc_bimc_gpu_axi");
+-	branch_on(gcc, 0x3600c, "gcc_gpu_memnoc_gfx");
+-	branch_on(gcc, 0x36018, "gcc_gpu_snoc_dvm_gfx");
++	branch_on(gcc, 0x7100c, "gcc_gpu_memnoc_gfx");
++	branch_on(gcc, 0x71018, "gcc_gpu_snoc_dvm_gfx");
+ 	if (!gdsc_on(0x106c, 0, 0, 0x1540)) {
+ 		IOLog("TopazGPU: CX GDSC: no PWR_ON\n");
+ 		return false;
+-- 
+2.43.0

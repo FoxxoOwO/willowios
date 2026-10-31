@@ -694,6 +694,44 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Boot-args: `gpu=1 gpu_mhz=600 sweetfb_hz=20 sweettouch=0`.
    - Built [`xnu/out/payload-gui10.bin`](xnu/out/payload-gui10.bin) (`17,528,576` B) and [`shim/out/shim-evox-boot-gui10.img`](shim/out/shim-evox-boot-gui10.img) (`17,829,888` B).
 
+## 2026-10-31: Analysis of `sweet-log28.txt` (`gui10`) & GPU / Crashloop Fixes in `gui11`
+
+### 1. Root Cause Analysis of Slowness in `gui10` (`sweet-log28.txt`, `flush #87`, `4,061` lines)
+1. **eMMC Multi-Block 50 MHz Confirmed**:
+   - Time between kernel start and `present #2` dropped from 200 s (`gui8`) to **70 s (`gui10`)** (only 14× `SWEET INTF1` instead of 40×).
+2. **GPU Did NOT Start (Thread Hung on TrustZone SCM)**:
+   - Lines 238–242:
+     ```text
+     TopazGPU: gcc_gpu_memnoc_gfx stays off (80000221)
+     TopazGPU: gcc_gpu_snoc_dvm_gfx stays off (80000001)
+     TopazGPU: powered: RBBM_STATUS 00000001
+     TopazGPU: zap: embedded firmware (6860 + 2096 bytes)
+     TopazGPU: zap: metadata at 0x64000000
+     ```
+   - GPU thread froze in `scm()` because:
+     a) **Wrong GCC clock offsets**: `TopazAdreno.cpp` had `topaz` (`SM6225`) offsets `0x3600c` and `0x36018`. On `willow` (`SM6125`), `gcc_gpu_memnoc_gfx` is at `0x7100c` and `gcc_gpu_snoc_dvm_gfx` is at `0x71018`.
+     b) **Unbooted `PIL_SHUTDOWN`**: Calling `PIL_SHUTDOWN` before `PIL_INIT_IMAGE` on an unbooted GPU in reset state caused TrustZone to hang on interconnect bus access.
+     c) **Wrong `ZAP_REGION`**: `0x55B15000` (topaz) instead of `0x57515000` (willow `gpu_region@57515000`).
+   - Because `RedwoodGPU` never started (`ready = false`), the system fell back entirely to Mesa `softpipe` CPU software rendering.
+3. **Launchd Extension Crashloop**:
+   - `launchd` spawned over 600 processes (`CollectionsPosterExtension`, `PhotosReliveWidget`, etc.) which died on `extension check-in timeout` and triggered continuous `ReportCrash` + `spindump`.
+
+### 2. Fixes Applied in [`shim/out/shim-evox-boot-gui11.img`](shim/out/shim-evox-boot-gui11.img)
+1. **SM6125 GCC Bus Clock Registers Patched in `xnu/out/kernel.development.sweet`**:
+   - `0xfffffe0007b170b0`: `add x8, x8, #0x71, lsl #12` (`0x7100c`, was `0x3600c`).
+   - `0xfffffe0007b1710c`: `add x8, x8, #0x71, lsl #12` (`0x71018`, was `0x36018`).
+2. **Skipped `PIL_SHUTDOWN` Before `PIL_INIT_IMAGE`**:
+   - `0xfffffe0007b181e8`: `b #0xfffffe0007b18258` (branches directly to `PIL_INIT_IMAGE`).
+3. **Corrected `ZAP_REGION` to `0x57515000`**:
+   - `0xfffffe0007b18360`, `0xfffffe0007b18394`, `0xfffffe0007b18414`: `movk wN, #0x5751, lsl #16`.
+4. **Added Patch [`xnu/patches/0959-willow-adreno-sm6125.patch`](xnu/patches/0959-willow-adreno-sm6125.patch)**.
+5. **Suppressed Extension Timeouts**:
+   - Added `launchd_disable_all_timeouts=1` to kernel `cmdline`.
+6. **Built Artifacts**:
+   - [`xnu/out/payload-gui11.bin`](xnu/out/payload-gui11.bin) (`17,528,576` B).
+   - [`shim/out/shim-evox-boot-gui11.img`](shim/out/shim-evox-boot-gui11.img) (`17,829,888` B).
+
+
 
 
 
