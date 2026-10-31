@@ -305,7 +305,6 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowm
         ],
     )
     product = [node("product", [ph()] + product_props, [haptics])] if product_props else []
-    options = node("options", [ph()])
     padded32 = lambda s: s.encode().ljust(32, b"\0")[:32]
 
     return node(
@@ -336,7 +335,7 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowm
             ("#address-cells", u32(2)),
             ("#size-cells", u32(2)),
         ],
-        [chosen, defaults, options, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]),
+        [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]),
     )
 
 
