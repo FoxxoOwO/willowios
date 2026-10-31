@@ -731,6 +731,37 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - [`xnu/out/payload-gui11.bin`](xnu/out/payload-gui11.bin) (`17,528,576` B).
    - [`shim/out/shim-evox-boot-gui11.img`](shim/out/shim-evox-boot-gui11.img) (`17,829,888` B).
 
+## 2026-10-31: Analysis of `sweet-log-gui11.txt` (`flush #36`, `2,432` lines) & Willow Signed Zap Firmware (`gui12`)
+
+### 1. Verification of `gui11` Improvements
+1. **Extension Timeout Crashloop Completely Gone**:
+   - `launchd_disable_all_timeouts=1` worked 100%: timeouts dropped from >600 in `gui10` to **1** in `gui11`! Boot completed much faster.
+2. **SM6125 GCC Bus Clocks Enabled Cleanly**:
+   - `gcc_gpu_memnoc_gfx` (`0x7100c`) and `gcc_gpu_snoc_dvm_gfx` (`0x71018`) enabled without any `stays off` warnings.
+3. **`smc #0` Did Not Hang**:
+   - Skipping `PIL_SHUTDOWN` worked; TrustZone returned cleanly without bus hang.
+
+### 2. Root Cause of `TopazGPU: zap init_image: ffcfffbb/0`
+- Line 243 in `sweet-log-gui11.txt`:
+  ```text
+  TopazGPU: zap: metadata at 0x64000000
+  TopazGPU: zap init_image: ffcfffbb/0
+  TopazGPU: THE GPU IS NOT STARTED
+  ```
+- Error `0xFFCFFFBB` is Qualcomm TrustZone's standard rejection code for **invalid firmware signature / certificate mismatch**.
+- In `kernel.development.sweet`, `topaz_fw_zap_mdt` was compiled with the firmware signed for `topaz` (Snapdragon 680 / SM6225). TrustZone rejected the certificate because `willow` is Snapdragon 665 / SM6125 (`msm-id 0x18a 0x10000`).
+- Similarly, `topaz_fw_sqe_fw` was from topaz (32,504 bytes), not willow (31,980 bytes).
+
+### 3. Fixes in [`shim/out/shim-evox-boot-gui12.img`](shim/out/shim-evox-boot-gui12.img)
+1. **Embedded Signed Willow Zap Shader MDT**:
+   - Overwrote `0x2d9d8` with [`firmware/willow/a610_zap.mdt`](firmware/willow/a610_zap.mdt) (`6,860` B, signed for `willow` SM6125).
+2. **Embedded Signed Willow SQE Firmware**:
+   - Overwrote `0x2fce8` with [`firmware/willow/a630_sqe.fw`](firmware/willow/a630_sqe.fw) (`31,980` B).
+   - Updated `_topaz_fw_sqe_fw_size` at `0x37be0` to `31,980`.
+3. **Built Artifacts**:
+   - [`xnu/out/payload-gui12.bin`](xnu/out/payload-gui12.bin) (`17,528,576` B).
+   - [`shim/out/shim-evox-boot-gui12.img`](shim/out/shim-evox-boot-gui12.img) (`17,829,888` B).
+
 
 
 
