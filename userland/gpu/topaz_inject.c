@@ -224,6 +224,122 @@ container_manager_fixes(void)
 	}
 }
 
+static void
+log_console(const char *msg)
+{
+	FILE *fp = fopen("/dev/console", "w");
+	if (fp != NULL) {
+		fwrite(msg, strlen(msg), 1, fp);
+		fclose(fp);
+	}
+}
+
+/*
+ * mobileactivationd:
+ *   1) -[DeviceType should_hactivate] -> YES
+ *   2) -[DataArk initWithPath:] -> pre-populate PreSydroDataMigrationCompleted = @YES,
+ *      DataMigrationCompleted = @YES, ActivationState = @"Activated", BrickState = @NO
+ *      so PerformMigration skips SEP keychain queries and Hactivation succeeds.
+ */
+static BOOL
+ret_one(__unused id self, __unused SEL _cmd)
+{
+	return YES;
+}
+
+static id (*orig_dataark_initWithPath)(id self, SEL _cmd, id path);
+
+static id
+my_dataark_initWithPath(id self, SEL _cmd, id path)
+{
+	self = orig_dataark_initWithPath(self, _cmd, path);
+	if (self != nil) {
+		uintptr_t mh = (uintptr_t)orig_dataark_initWithPath - 0xcf58;
+		void (*set_ark_value)(id, id, id, id, int) = (void (*)(id, id, id, id, int))(mh + 0xd7e4);
+		id k_pre  = *(id *)(mh + 0x215d10); /* @"PreSydroDataMigrationCompleted" */
+		id k_dm   = *(id *)(mh + 0x215d20); /* @"DataMigrationCompleted" */
+		id k_act  = *(id *)(mh + 0x215b60); /* @"ActivationState" */
+		id v_act  = *(id *)(mh + 0x215a10); /* @"Activated" */
+		id k_brk  = *(id *)(mh + 0x215bc8); /* @"BrickState" */
+		id v_yes  = *(id *)(mh + 0x2143d0); /* @YES */
+		id v_no   = *(id *)(mh + 0x2143c8); /* @NO */
+
+		set_ark_value(self, nil, k_pre, v_yes, 0);
+		set_ark_value(self, nil, k_dm,  v_yes, 0);
+		set_ark_value(self, nil, k_act, v_act, 0);
+		set_ark_value(self, nil, k_brk, v_no,  1);
+	}
+	return self;
+}
+
+static void
+mobileactivationd_fixes(void)
+{
+	Class dt = objc_getClass("DeviceType");
+	Method m1 = dt ? class_getInstanceMethod(dt, sel_registerName("should_hactivate")) : NULL;
+	if (m1 != NULL) {
+		method_setImplementation(m1, (IMP)ret_one);
+	}
+	Class da = objc_getClass("DataArk");
+	Method m2 = da ? class_getInstanceMethod(da, sel_registerName("initWithPath:")) : NULL;
+	if (m2 != NULL) {
+		orig_dataark_initWithPath = (id (*)(id, SEL, id))method_setImplementation(m2, (IMP)my_dataark_initWithPath);
+	}
+	log_console("topaz-inject: hooked mobileactivationd (should_hactivate + DataArk)\n");
+}
+
+/*
+ * SpringBoard (scheme from hackios inject_sb.c):
+ *   1) -[SBLockdownManager _setupActivationState] -> *(int *)((char *)self + 8) = 2 (LOCKDOWN_ACTIVATED)
+ *   2) -[SBSetupManager _setSetupRequiredReason:] -> pass reason = 0 (skip Setup Assistant)
+ *   3) +[XBApplicationSnapshotManifestImpl _outputFormatForSnapshot:] -> return 0 (PNG instead of slow ASTC)
+ */
+static void
+sb_setup_activation_state(id self, __unused SEL _cmd)
+{
+	*(int *)((char *)self + 8) = 2;
+}
+
+static void (*orig_sb_set_setup_reason)(id self, SEL _cmd, long reason);
+
+static void
+sb_set_setup_reason(id self, SEL _cmd, __unused long reason)
+{
+	orig_sb_set_setup_reason(self, _cmd, 0);
+}
+
+static long
+sb_snapshot_output_format(__unused id self, __unused SEL _cmd, __unused id snapshot)
+{
+	return 0;
+}
+
+static void
+springboard_fixes(void)
+{
+	Class c1 = objc_getClass("SBLockdownManager");
+	Method m1 = c1 ? class_getInstanceMethod(c1, sel_registerName("_setupActivationState")) : NULL;
+	if (m1 != NULL) {
+		method_setImplementation(m1, (IMP)sb_setup_activation_state);
+	}
+	Class c2 = objc_getClass("SBSetupManager");
+	Method m2 = c2 ? class_getInstanceMethod(c2, sel_registerName("_setSetupRequiredReason:")) : NULL;
+	if (m2 != NULL) {
+		orig_sb_set_setup_reason = (void (*)(id, SEL, long))method_setImplementation(m2, (IMP)sb_set_setup_reason);
+	}
+	Class c3 = objc_getClass("XBApplicationSnapshotManifestImpl");
+	Method m3 = c3 ? class_getClassMethod(c3, sel_registerName("_outputFormatForSnapshot:")) : NULL;
+	if (m3 != NULL) {
+		method_setImplementation(m3, (IMP)sb_snapshot_output_format);
+	}
+	Class c4 = objc_getClass("_UIScreenComplexBoundingPathUtilities");
+	Method m4 = c4 ? class_getClassMethod(c4, sel_registerName("isAvailableForScreen:")) : NULL;
+	if (m4 != NULL) {
+		method_setImplementation(m4, (IMP)sb_snapshot_output_format);
+	}
+	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding)\n");
+}
+
 __attribute__((constructor))
 static void
 topaz_inject(void)
@@ -236,6 +352,14 @@ topaz_inject(void)
 
 	if (name != NULL && strncmp(name, "containermanagerd", 17) == 0) {
 		container_manager_fixes();
+		return;
+	}
+	if (name != NULL && strcmp(name, "mobileactivationd") == 0) {
+		mobileactivationd_fixes();
+		return;
+	}
+	if (name != NULL && strcmp(name, "SpringBoard") == 0) {
+		springboard_fixes();
 		return;
 	}
 	if (name == NULL || strcmp(name, "backboardd") != 0 || topaz_gl_path() == NULL) {

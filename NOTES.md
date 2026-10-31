@@ -504,3 +504,97 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - [`shim/out/shim-evox-boot-gui2.img`](shim/out/shim-evox-boot-gui2.img) (31,363,072 B).
    - Updated [`tools/mkglboot.sh`](tools/mkglboot.sh) with `sweethidtest=5 glframes=1`.
 
+## 2026-10-31: Analysis of `sweet-log22.txt` + 4 Reference Repos & Fix for `mobileactivationd` / `SpringBoard` (`gui3`)
+
+### 1. Root Cause Analysis from `sweet-log22.txt` (202,732 B, flush #215)
+- **Observation 1 (`SpringBoard` blocked in `_setupActivationState`)**:
+  - Symbolicating `SpringBoard` `t0` (`0x1c598da78` unslid in `20H392` shared cache = `-[SBLockdownManager _setupActivationState]` -> `0x1c90cf874` `MAEGetActivationStateWithError`) proved that `SpringBoard`'s main thread is synchronously blocked on an XPC call to `com.apple.mobileactivationd` before creating any scene or `IOSurface` (`0` `SWEET SURF: ... create` calls).
+- **Observation 2 (`mobileactivationd` crash-looping 450+ times on `0x1001bf3bc` `brk #1` from `main` `0x100050670`)**:
+  - Disassembling `/usr/libexec/mobileactivationd` from `scratch/iOSRoot-patched.simg` revealed:
+    - When `tools/sweet-root-tweaks.py` ran on the fresh rootfs before the first boot, `/private/var/containers/Data/System` was empty (`containermanagerd` had not created the system container UUID yet), so `data_ark.plist` was never pre-populated!
+    - At boot, `mobileactivationd` `main` (`0x100050454`) calls `PerformMigration` (`0x10001ab98` -> `0x10001ac5c`). Because `-BuildVersion` is missing in `DataArk`, it calls `perform_sydro_data_migration_tasks` (`0x100029958`).
+    - `perform_sydro_data_migration_tasks` first checks `0x10001b8f0` (`DataArk[@"-PreSydroDataMigrationCompleted"]`). If `@YES`, it immediately returns `1` (`0x100029a24`). Because `data_ark.plist` was empty, it returned `0` and proceeded to `0x100029b80` (SEP/Keychain query), which fails without SEP (`"Failed to query keychain."`), causing `PerformMigration` to return `0` and `main` (`0x100050670`) to abort via `0x1001bf35c` (`"Migration failed."`, `brk #1`) before starting `NSXPCListener` (`0x1000504c4`).
+- **Observation 3 (Why `gui2.img` did not clear the framebuffer to black)**:
+  - At file offset `0xb0f018` (`VA 0xfffffe0007b13018`) in `xnu/out/kernel.development.sweet`, the loop used `sub w2, w2, #0x10` (`0x51004042`) instead of flag-setting `subs w2, w2, #0x10` (`0x71004042`), exiting after 16 bytes.
+
+### 2. Findings from the 4 Reference Repositories
+- **`dipa-studio/ios-sweet` & `MakrSas/ios-topaz`**:
+  - Rely on `data_ark.plist` having `-PreSydroDataMigrationCompleted = True`, `-DataMigrationCompleted = True`, `-ActivationState = 'Activated'`, `-BrickState = False` and `-[DeviceType should_hactivate]` (`0x1000170d4`) returning `1` so `dealwith_activation` (`0x10001b5a0`) takes the `Hactivation` branch.
+- **`oosexgang/hackios-xnu-kernel` (`userland/src/inject_sb.c`)**:
+  - Uses `method_setImplementation` inside `SpringBoard` (avoiding `W^X` `__TEXT` protection issues) to replace:
+    1. `-[SBLockdownManager _setupActivationState]` -> sets `*(int *)((char *)self + 8) = 2` (`LOCKDOWN_ACTIVATED`) and returns immediately without XPC to `mobileactivationd`.
+    2. `-[SBSetupManager _setSetupRequiredReason:]` -> passes `reason = 0` to original `IMP` (never launches Setup Assistant).
+    3. `+[XBApplicationSnapshotManifestImpl _outputFormatForSnapshot:]` -> returns `0` (`PNG` instead of slow software `ASTC` compression).
+- **`joranv1/ios-sailfish`**:
+  - Provides `sweetgl/layerdump.c` and confirms `SweetFramebuffer` `present()` direct/composite scanout handling.
+
+### 3. Fixes Applied in `shim/out/shim-evox-boot-gui3.img`
+1. **Extended `scratch/gpu/libtopaz-inject.dylib` (and `userland/gpu/topaz_inject.c`)**:
+   - In `mobileactivationd`:
+     - Replaces `-[DeviceType should_hactivate]` with `mov w0, #1; ret`.
+     - Replaces `-[DataArk initWithPath:]` with `fn_my_initWithPath`, which calls original `initWithPath:` (`mh + 0xcf58`) and then calls `set_ark_value` (`mh + 0xd7e4`) to set `PreSydroDataMigrationCompleted = @YES`, `DataMigrationCompleted = @YES`, `ActivationState = @"Activated"`, `BrickState = @NO` (with `flush = 1`).
+   - In `SpringBoard`:
+     - Replaces `-[SBLockdownManager _setupActivationState]` with `mov w8, #2; str w8, [x0, #8]; ret`.
+     - Replaces `-[SBSetupManager _setSetupRequiredReason:]` to force `x2 = 0` (`reason = 0`).
+     - Replaces `+[XBApplicationSnapshotManifestImpl _outputFormatForSnapshot:]` to return `0` (`PNG`).
+   - Logs confirmation directly to `/dev/console`.
+2. **Fixed Framebuffer Zeroing Loop in `xnu/out/kernel.development.sweet`**:
+   - Changed `0xb0f018` from `0x51004042` (`sub`) to `0x71004042` (`subs w2, w2, #0x10`).
+3. **Updated Boot-Args & Rebuilt Boot Image**:
+   - `topaz_inject=/private/var/tmp/libtopaz-inject.dylib,backboardd,containermanagerd,mobileactivationd,SpringBoard`
+   - Built [`xnu/out/payload-gui3.bin`](xnu/out/payload-gui3.bin) (31,060,528 B) and [`shim/out/shim-evox-boot-gui3.img`](shim/out/shim-evox-boot-gui3.img) (31,363,072 B).
+
+## 2026-10-31: Analysis of `sweet-log23.txt` (`gui3`) & CodeDirectory SHA256 Fix (`gui4`)
+
+### 1. Observations from `sweet-log23.txt` (1,368,772 B, flush #99)
+- `libtopaz-inject.dylib` was successfully injected into `SpringBoard` and `mobileactivationd`:
+  - `topaz-inject: hooked SpringBoard (activation + setup + snapshot)`
+  - `topaz-inject: hooked mobileactivationd (should_hactivate + DataArk)`
+- However, immediately before each constructor ran, the kernel logged `175` occurrences of:
+  - `CODE SIGNING: cs_invalid_page(0x10050c000): p=65[containermanager] final status 0x22000000, allowing (remove VALID) page`
+  - `CODE SIGNING: cs_invalid_page(0x104738000): p=26[SpringBoard] final status 0x22000000, allowing (remove VALID) page`
+  - `CODE SIGNING: cs_invalid_page(0x102d80000): p=57[backboardd] final status 0x22000000, allowing (remove VALID) page`
+  - `CODE SIGNING: cs_invalid_page(0x104ba8000): p=128[mobileactivation] final status 0x22000000, allowing (remove VALID) page`
+- **Root Cause**:
+  - When `scratch/gpu/libtopaz-inject.dylib` was patched at `0x4070` (page 4) and `0x5000..0x558a` (page 5), its `LC_CODE_SIGNATURE` `CodeDirectory` (13× 4096-byte page SHA256 slots at file offset `0xca54`) still held the old SHA256 digests for slots 4 and 5.
+  - When `vm_page_validate_cs_mapped` faulted in pages 4 and 5 of `libtopaz-inject.dylib`, the SHA256 mismatch triggered `cs_invalid_page`, which stripped `CS_VALID` from the entire host process (`SpringBoard`, `backboardd`, `containermanagerd`, `mobileactivationd`).
+  - Without `CS_VALID`, XNU refused to return the processes' entitlements:
+    - `SpringBoard` failed `BSSelfTaskHasEntitlement(@"com.apple.springboard-ui.client")` in `+[SpringBoardUI load]` (`0x1f0f09010`) and aborted (`This process should not be linking or loading SpringBoardUI.framework`).
+    - `mobileactivationd` failed container lookup (`Failed to copy container path(s).` at `0x1001bf56c`).
+
+### 2. Fix Applied in `shim/out/shim-evox-boot-gui4.img`
+- Updated [`scratch/patch_inject.py`](scratch/patch_inject.py) to recalculate all 13 SHA256 page hashes (4096-byte pages up to `codeLimit = 0xca30`) in the `LC_CODE_SIGNATURE` `CodeDirectory` of [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib) and verified `match=True` across all 13 slots.
+- Rebuilt [`xnu/out/payload-gui4.bin`](xnu/out/payload-gui4.bin) (31,060,528 B) and [`shim/out/shim-evox-boot-gui4.img`](shim/out/shim-evox-boot-gui4.img) (31,363,072 B).
+
+## 2026-10-31: Analysis of `sweet-log24.txt` (`gui4`) & Fix for `/product` Device Tree + `_UIScreenComplexBoundingPathUtilities` (`gui5`)
+
+### 1. Hardware & Log Observations from `sweet-log24.txt` (1,938,860 B, flush #118)
+- **Screen Cleared to Black on `present #1`**:
+  - User photos confirmed that the `subs w2, w2, #0x10` fix at `0xb0f018` worked: the early boot console was wiped to black on `present #1`, leaving only 4 `SK[1]: __nexus_register` lines at the top caused by `-enable_kprintf_spam` in `boot-args`.
+- **`cs_invalid_page` Dropped from `175` to `0`**:
+  - Recalculating the 13 SHA-256 page hashes in `libtopaz-inject.dylib`'s `CodeDirectory` completely eliminated `cs_invalid_page` (`0` occurrences).
+- **`mobileactivationd` Crash-Loop Completely Resolved (`0` crashes)**:
+  - `mobileactivationd` ran once (`topaz-inject: hooked mobileactivationd (should_hactivate + DataArk)`), completed `PerformMigration` and `Hactivation`, and stayed alive for the entire boot without a single crash.
+- **`SpringBoard` Reached Lock Screen (`CSMainPageContentViewController`) and Launched Lock Screen Widgets**:
+  - `SpringBoard` passed lockdown activation and setup checks, created `CADisplay` (`375x812@3x (1125x2436/3) 60Hz sRGB SDR`), initialized `CSMainPageContentViewController` (CoverSheet / Lock Screen) and `SBTraitsParticipantRoleHomeScreen-0`, and spawned Lock Screen widget extensions (`LockScreenPeople`, `BatteriesWidgetE`, `SleepWidgetExten`).
+- **Exact Cause of `SpringBoard` Exception right before First Lock Screen Render (lines 1200, 1673–1677)**:
+  - `IOK SpringBoard: path IODeviceTree:/product -> none`
+  - `*** Assertion failure in -[_UIScreenComplexBoundingPathUtilities _loadBitmapForScreen:type:], _UIScreenComplexBoundingPathUtilities.m:326`
+  - `*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'Failed to load bounding path bitmap data from the asset manager for asset name: BoundingPathBitmap-1125x2436-375x812-3.00x'`
+  - **Why**:
+    1. [`tools/mkadt.py`](tools/mkadt.py) warned `research/ipsw-x/d22ap.adt missing, no /product node`, so the generated Apple Device Tree lacked `/product` (where `MobileGestalt` reads `artwork-device-idiom = "phone"`, `artwork-device-subtype = 2436`, `artwork-scale-factor = 3`, `artwork-display-gamut = "sRGB"`, `graphics-featureset-class = "APPLE4"`, etc.).
+    2. In `UIKitCore`, `+[_UIScreenBoundingPathUtilities boundingPathUtilitiesForScreen:]` (`0x18908565c`) calls `+[_UIScreenComplexBoundingPathUtilities isAvailableForScreen:]` (`0x18a3fb860`); if it returns non-zero, it instantiates `_UIScreenComplexBoundingPathUtilities`, which asserts if `BoundingPathBitmap-1125x2436-375x812-3.00x` cannot be loaded from the asset catalog.
+
+### 2. Fixes Applied in `shim/out/shim-evox-boot-gui5.img`
+1. **Added Complete `D22AP` `/product` (61 properties), `/product/haptics`, `/options`, and Identity Properties to [`tools/mkadt.py`](tools/mkadt.py)**:
+   - Extracted the exact 61 `identity_product` properties and 2 `identity_haptics` properties from `scratch/hackios/prebuilt/loader.efi` (`.rdata` at `0xc550` / `0xc3d0` and `0xc928` / `0xc920`) and embedded them as `D22AP_PRODUCT_FALLBACK` in [`tools/mkadt.py`](tools/mkadt.py) (with `artwork-display-gamut = "sRGB\0"`).
+   - Added `/product/haptics` (`closed-loop = 1`, `supports-3rd-party-haptics = 1`), `/options`, and root/chosen identity properties (`platform-name = "t8015"`, `serial-number`, `mlb-serial-number`, `model-number`, `region-info`, `regulatory-model-number`, `board-id = 6`, `mac-address-wifi0`, `mac-address-bluetooth0`, `software-behavior`, `display-rotation = 0`).
+2. **Hooked `+[_UIScreenComplexBoundingPathUtilities isAvailableForScreen:]` → `0` (`NO`) in `SpringBoard`**:
+   - Updated [`scratch/patch_inject.py`](scratch/patch_inject.py) and [`userland/gpu/topaz_inject.c`](userland/gpu/topaz_inject.c) so `SpringBoard` hooks class method `+[_UIScreenComplexBoundingPathUtilities isAvailableForScreen:]` via `_class_getClassMethod` (`0x4a40`) and sets its implementation to `FN_RET_ZERO` (`mov x0, #0; ret`), forcing `UIKitCore` to use `_UIScreenRectangularBoundingPathUtilities`.
+   - Re-ran [`scratch/patch_inject.py`](scratch/patch_inject.py) and updated all 13 SHA-256 page hashes in `LC_CODE_SIGNATURE`.
+3. **Removed `-enable_kprintf_spam` from `cmdline` & Rebuilt Boot Image**:
+   - Built [`xnu/out/payload-gui5.bin`](xnu/out/payload-gui5.bin) (`31,064,080` B) and [`shim/out/shim-evox-boot-gui5.img`](shim/out/shim-evox-boot-gui5.img) (`31,367,168` B).
+
+
+
+

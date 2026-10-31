@@ -29,7 +29,7 @@ python3 tools/mkadt.py scratch/adt-blobs.adt --blobs scratch/blobs.bin
 CL="debug=0xc serial=3 cpus=2 keepsyms=1 startup_debug=1 -v -enable_kprintf_spam rd=ufsroot0 \
 unentitled_ios_sim_launch=1 ignition_level=1 launchd_unsecure_cache=1 wdt_test=no_user_checkin \
 wdt=-1 ufsrw=1 rootrw=1 sweetfb_hz=60 sweetfb_noconsole=1 sweetfb_stayon=1 sweethidtest=5 glframes=1 \
-topaz_inject=/private/var/tmp/libtopaz-inject.dylib,backboardd,containermanagerd gl=force $EXTRA"
+topaz_inject=/private/var/tmp/libtopaz-inject.dylib,backboardd,containermanagerd,mobileactivationd,SpringBoard gl=force $EXTRA"
 
 python3 tools/mkpayload.py xnu/out/kernel.development.sweet scratch/adt-blobs.adt \
 	xnu/out/payload-gl.bin --cmdline "$CL"

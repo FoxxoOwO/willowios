@@ -48,12 +48,75 @@ BOOT_MANIFEST_HASH = hashlib.sha384(b"willow boot manifest").digest()
 
 D22AP_ADT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../research/ipsw-x/d22ap.adt")
 
+D22AP_PRODUCT_FALLBACK = [
+    ("sandman-support", b"\x01\x00\x00\x00"),
+    ("display-mirroring", b"\x01\x00\x00\x00"),
+    ("car-integration", b"\x01\x00\x00\x00"),
+    ("assistant", b"\x01\x00\x00\x00"),
+    ("lockdown-certtype", b"\x01\x00\x00\x00"),
+    ("ui-pip", b"\x01\x00\x00\x00"),
+    ("wifi-chipset", b"4357\x00"),
+    ("product-name", b"iPhone X\x00"),
+    ("hearingaid-audio-equalization", b"\x01\x00\x00\x00"),
+    ("RF-exposure-separation-distance", b"\x05\x00\x00\x00"),
+    ("mobiledevice-min-ver", b"1400\x00"),
+    ("product-id", b"\xfd\x07\x9b)\x81D\xa7\xde\xb4\xd7\xc8\x7f\xef>\xb4t\xd8\xf0\xe7\xeb"),
+    ("gps-capable", b"\x01\x00\x00\x00"),
+    ("product-description", b"iPhone X\x00"),
+    ("allow-32bit-apps", b"\x01\x00\x00\x00"),
+    ("low-power-wallet-mode", b"\x01\x00\x00\x00"),
+    ("builtin-mics", b"\x04\x00\x00\x00"),
+    ("has-boot-chime", b"\x00\x00\x00\x00"),
+    ("supports-burnin-mitigation", b"\x01\x00\x00\x00"),
+    ("compatible-device-fallback", b"iPhone9,2\x00"),
+    ("device-perf-memory-class", b"\x04\x00\x00\x00"),
+    ("artwork-scale-factor", b"\x03\x00\x00\x00"),
+    ("baseband-chipset", b"mav17\x00"),
+    ("hearingaid-low-energy-audio", b"\x01\x00\x00\x00"),
+    ("ui-background-quality", b"d\x00\x00\x00"),
+    ("supports-avatars", b""),
+    ("public-key-accelerator", b"\x01\x00\x00\x00"),
+    ("disable-globe-map", b""),
+    ("artwork-device-idiom", b"phone\x00"),
+    ("device-color-policy", b"\x00\x00\x00\x00"),
+    ("graphics-featureset-class", b"APPLE4\x00"),
+    ("siri-gesture", b"\x01\x00\x00\x00"),
+    ("supports-maps-optical-heading", b""),
+    ("compatible-app-variant", b"0\x00"),
+    ("artwork-dynamic-displaymode", b"0\x00"),
+    ("bluetooth-le", b"\x01\x00\x00\x00"),
+    ("watch-companion", b"\x01\x00\x00\x00"),
+    ("has-applelpm", b"\x00\x00\x00\x00"),
+    ("iap2-protocol-supported", b"\x01\x00\x00\x00"),
+    ("ephemeral-data-mode", b"\x00\x00\x00\x00"),
+    ("activation-protocol-version", b"\x02\x00\x00\x00"),
+    ("volume-up-button-location", b"x\xb0\t\x00\xff\x96\x14\x000\xe0\x03\x00\xca\x9d\x01\x00\x10'\x00\x00"),
+    ("ptp-large-files", b"\x01\x00\x00\x00"),
+    ("udid-version", b"\x01\x00\x00\x00"),
+    ("offline-dictation", b"\x01\x00\x00\x00"),
+    ("location-reminders", b"\x01\x00\x00\x00"),
+    ("ui-weather-quality", b"d\x00\x00\x00"),
+    ("graphics-featureset-fallbacks", b"APPLE3:APPLE3v1:APPLE2:APPLE1:GLES2,0\x00"),
+    ("dictation", b"\x01\x00\x00\x00"),
+    ("itunes-min-ver", b"\x03\x07\x0c\x00"),
+    ("artwork-display-gamut", b"sRGB\x00"),
+    ("front-cam-offset-from-center", b"\xd0\x01\x01\x00\x9e\x1d\x00\x00\xe8\x03\x00\x00\x00\x00\x00\x00"),
+    ("ui-reachability", b"\x01\x00\x00\x00"),
+    ("volume-down-button-location", b"x\xb0\t\x00\xff\x96\x14\x00H\xd0\x05\x00\xca\x9d\x01\x00\x10'\x00\x00"),
+    ("personal-hotspot", b"\x01\x00\x00\x00"),
+    ("single-stage-boot", b"\x01\x00\x00\x00"),
+    ("mobiledevice-beta-min-ver", b"1190.100.2\x00"),
+    ("oled-display", b"\x01\x00\x00\x00"),
+    ("thin-bezel", b"\x01\x00\x00\x00"),
+    ("artwork-device-subtype", b"\x84\t\x00\x00"),
+    ("side-button-location", b"u\xf3\x00\x00*\x0f\x02\x00\x00q\x00\x00\xea?\x00\x00\xe8\x03\x00\x00"),
+]
+
 
 def d22ap_product(path=D22AP_ADT):
     """/product properties of the real D22AP tree, without the syscfg placeholders."""
     if not os.path.exists(path):
-        print(f"warning: {path} missing, no /product node", file=sys.stderr)
-        return None
+        return list(D22AP_PRODUCT_FALLBACK)
     root, _ = adt.parse(open(path, "rb").read())
     for c in root.children:
         if dict((k, v) for k, f, v in c.props).get("name") == b"product\0":
@@ -102,8 +165,13 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowm
             ("boot-manifest-hash", BOOT_MANIFEST_HASH),
             ("crypto-hash-method", cstr("sha2-384")),
             ("display-scale", u32(3)),
+            ("display-rotation", u32(0)),
             ("unique-chip-id", struct.pack("<Q", SWEET_ECID)),
             ("chip-id", u32(0x8015)),
+            ("board-id", u32(0x06)),
+            ("mac-address-wifi0", b"\x02\x57\x49\x4c\x00\x01"),
+            ("mac-address-bluetooth0", b"\x02\x57\x49\x4c\x00\x02"),
+            ("software-behavior", b"\x00" * 16),
             ("certificate-production-status", u32(0)),
             ("effective-production-status-ap", u32(0)),
             ("certificate-security-mode", u32(1)),
@@ -228,7 +296,17 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowm
     product_props = d22ap_product()
     if product_props:
         product_props = [(k, cstr("sRGB") if k == "artwork-display-gamut" else v) for k, v in product_props]
-    product = [node("product", [ph()] + product_props)] if product_props else []
+    haptics = node(
+        "haptics",
+        [
+            ph(),
+            ("closed-loop", u32(1)),
+            ("supports-3rd-party-haptics", u32(1)),
+        ],
+    )
+    product = [node("product", [ph()] + product_props, [haptics])] if product_props else []
+    options = node("options", [ph()])
+    padded32 = lambda s: s.encode().ljust(32, b"\0")[:32]
 
     return node(
         "device-tree",
@@ -249,10 +327,16 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, lowm
             ("target-type", cstr("D22")),
             ("target-sub-type", cstr("D22AP")),
             ("manufacturer", cstr("Apple Inc.")),
+            ("platform-name", cstr("t8015")),
+            ("serial-number", padded32("WIL00REDMI8T")),
+            ("mlb-serial-number", padded32("WIL00REDMI8TMLB00")),
+            ("model-number", padded32("MQAC2")),
+            ("region-info", padded32("LL/A")),
+            ("regulatory-model-number", padded32("A1865")),
             ("#address-cells", u32(2)),
             ("#size-cells", u32(2)),
         ],
-        [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]),
+        [chosen, defaults, options, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]),
     )
 
 
