@@ -333,7 +333,7 @@ springboard_fixes(void)
 		method_setImplementation(m3, (IMP)sb_snapshot_output_format);
 	}
 	Class c4 = objc_getClass("_UIScreenComplexBoundingPathUtilities");
-	Method m4 = c4 ? class_getClassMethod(c4, sel_registerName("isAvailableForScreen:")) : NULL;
+	Method m4 = c4 ? class_getClassMethod(c4, sel_registerName("isScreenSupported:")) : NULL;
 	if (m4 != NULL) {
 		method_setImplementation(m4, (IMP)sb_snapshot_output_format);
 	}

@@ -596,6 +596,24 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 3. **Removed `-enable_kprintf_spam` from `cmdline` & Rebuilt Boot Image**:
    - Built [`xnu/out/payload-gui5.bin`](xnu/out/payload-gui5.bin) (`31,064,080` B) and [`shim/out/shim-evox-boot-gui5.img`](shim/out/shim-evox-boot-gui5.img) (`31,367,168` B).
 
+## 2026-10-31: Analysis of `sweet-log25.txt` (`gui6`) & Exact Selector Fix `isScreenSupported:` (`gui7`)
+
+### 1. Hardware & Log Observations from `sweet-log25.txt` (1,144,295 B, flush #77)
+- **Clean Black Screen After Console**:
+  - Without `-enable_kprintf_spam`, no `SK[1]: __nexus_register` lines were printed over the black screen after `present #1`.
+- **`IODeviceTree:/product` Verified Active**:
+  - Line 1229: `IOK SpringBoard: path IODeviceTree:/product -> IOPlatformDevice`!
+  - With `/product` present, `SpringBoard` progressed further than ever: it launched `PosterBoard` (`com.apple.PosterBoard`) and Lock Screen wallpaper extensions (`GradientPosterEx`, `CollectionsPoste`, `ExtragalacticPos`) and created `UIRootWindow` (`creating 26<UIRootWindow:0x100d1df60> visibility`).
+- **Why `_UIScreenComplexBoundingPathUtilities` Still Ran in `gui6`**:
+  - Disassembling `+[_UIScreenBoundingPathUtilities boundingPathUtilitiesForScreen:]` (`0x18908565c..0x1890856c4`) and stub `0x18a3fb860` in `dyld_shared_cache_arm64.03` revealed that `0x18a3fb860` loads the selector at `0x1d5edb568` (`0x2018349e745`), which is **`"isScreenSupported:"`** (not `"isAvailableForScreen:"`).
+  - Because `_class_getClassMethod` for `"isAvailableForScreen:"` returned `NULL`, the hook did not attach, and `-[_UIScreenComplexBoundingPathUtilities _loadBitmapForScreen:type:]` (`0x1890857c4`) still executed and asserted on `BoundingPathBitmap-1125x2436-375x812-3.00x`.
+
+### 2. Fix Applied in `shim/out/shim-evox-boot-gui7.img`
+- Updated [`scratch/patch_inject.py`](scratch/patch_inject.py) and [`userland/gpu/topaz_inject.c`](userland/gpu/topaz_inject.c) to hook **`+[_UIScreenComplexBoundingPathUtilities isScreenSupported:]`** → `FN_RET_ZERO` (`mov x0, #0; ret`), so `+[_UIScreenBoundingPathUtilities boundingPathUtilitiesForScreen:]` selects `_UIScreenRectangularBoundingPathUtilities` (`0x1dce01458`).
+- Recalculated all 13 SHA-256 page hashes in `LC_CODE_SIGNATURE` `CodeDirectory`.
+- Built [`xnu/out/payload-gui7.bin`](xnu/out/payload-gui7.bin) (`31,064,000` B) and [`shim/out/shim-evox-boot-gui7.img`](shim/out/shim-evox-boot-gui7.img) (`31,367,168` B).
+
+
 
 
 
