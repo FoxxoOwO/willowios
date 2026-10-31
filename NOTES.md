@@ -796,6 +796,41 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - [`xnu/out/payload-gui13.bin`](xnu/out/payload-gui13.bin) (`31,064,000` B).
    - [`shim/out/shim-evox-boot-gui13.img`](shim/out/shim-evox-boot-gui13.img) (`31,365,120` B).
 
+## 2026-10-31: Analysis of `sweet-log-gui13.txt` & Crashloop Suppression / GL Logging (`gui14`)
+
+### 1. Root Cause Analysis of Persistent Slowness in `gui13` (`122,510` B, `2,348` lines, `flush #32`)
+1. **Adreno 610 Hardware Initialization Confirmed 100% Ready**:
+   - `TopazGPU: CP up (ME_INIT, SET_SECURE_MODE 0), core 600 MHz`, `RedwoodGPU published` (lines 251-252).
+   - Display MDP scanout hardware running at 64 Hz vsync (`SWEET INTF1: 320 frames in 5 s`).
+2. **Knihovny dylib úspěšně rozbaleny**:
+   - `SWEET BLOBS: 3 files in /private/var/tmp` (`libtopaz-gl.dylib`, `libtopaz-inject.dylib`, `libOSMesa.8.dylib`).
+   - `topaz: backboardd starts WITH DYLD_INSERT_LIBRARIES` (line 642).
+3. **Příčina přetížení CPU (Crash-loop a corpse exhaustion)**:
+   - Procesy `CollectionsPoster` (Lockscreen extension) a `homed` (HomeKit) padaly na `SIGABRT` / `Too many corpses being created` několikrát za sekundu (80 havárií, 249 spawnů `xpcproxy`).
+   - Každý pád probouzel `ReportCrash` a `coresymbolicationd`, které čtou diskové úložiště eMMC a počítají symboly pro `.ips` logy, což vytěžovalo všechna 4 jádra procesoru na 100 %.
+   - Vykreslování v `libOSMesa.8.dylib` navíc běží přes CPU `softpipe` (nikoli HW Freedreno DRM).
+4. **Dotyková vrstva vypnutá v cmdline**:
+   - `sweettouch=0` způsobovalo, že displej byl pro uživatele zcela netečný.
+
+### 2. Fixes Applied in [`shim/out/shim-evox-boot-gui14.img`](shim/out/shim-evox-boot-gui14.img)
+1. **Neutralizace padajících démonů v [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib)**:
+   - Rozšířen injektor v [`scratch/patch_inject.py`](scratch/patch_inject.py) a [`userland/gpu/topaz_inject.c`](userland/gpu/topaz_inject.c):
+     - `CollectionsPoster` (a `CollectionsPoste` prefix): zjištěn přes `strncmp`, zaloguje `topaz-inject: neutralized CollectionsPoster (sleeping)` a přejde do nekonečné smyčky `usleep(100000)` (0% CPU, 0 pádů, žádný ReportCrash).
+     - `homed`: zaloguje `topaz-inject: neutralized homed (sleeping)` a usne.
+     - `assetsd`: zaloguje `topaz-inject: neutralized assetsd (sleeping)` a usne.
+     - `ReportCrash`: zaloguje `topaz-inject: neutralized ReportCrash (exit 0)` a čistě se ukončí přes `exit(0)`.
+   - V `backboardd` přidáno přímé logování do `/dev/console` přes `FN_BB_LOG`:
+     - `"topaz-inject: backboardd GL loaded successfully!\n"` / `"FAILED!\n"`.
+   - Přepočteno všech 13 SHA256 hashe stránek v `CodeDirectory` (`LC_CODE_SIGNATURE`).
+2. **Aktualizace boot-args (`cmdline`) v [`xnu/out/payload-gui14.bin`](xnu/out/payload-gui14.bin)**:
+   - `topaz_inject=/private/var/tmp/libtopaz-inject.dylib,backboardd,containermanagerd,mobileactivationd,SpringBoard,CollectionsPoster,homed,assetsd,ReportCrash gl=force`
+3. **Sestavené artefakty**:
+   - [`scratch/blobs-full.bin`](scratch/blobs-full.bin) (`13,606,032` B).
+   - [`xnu/out/willow.adt`](xnu/out/willow.adt) (`13,616,612` B).
+   - [`xnu/out/payload-gui14.bin`](xnu/out/payload-gui14.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui14.img`](shim/out/shim-evox-boot-gui14.img) (`31,363,072` B).
+
+
 
 
 

@@ -354,6 +354,25 @@ topaz_inject(void)
 		container_manager_fixes();
 		return;
 	}
+	if (name != NULL && strncmp(name, "CollectionsPoste", 16) == 0) {
+		log_console("topaz-inject: neutralized CollectionsPoster (sleeping)\n");
+		while (1) { usleep(100000); }
+		return;
+	}
+	if (name != NULL && strcmp(name, "homed") == 0) {
+		log_console("topaz-inject: neutralized homed (sleeping)\n");
+		while (1) { usleep(100000); }
+		return;
+	}
+	if (name != NULL && strcmp(name, "assetsd") == 0) {
+		log_console("topaz-inject: neutralized assetsd (sleeping)\n");
+		while (1) { usleep(100000); }
+		return;
+	}
+	if (name != NULL && strcmp(name, "ReportCrash") == 0) {
+		log_console("topaz-inject: neutralized ReportCrash (exit 0)\n");
+		exit(0);
+	}
 	if (name != NULL && strcmp(name, "mobileactivationd") == 0) {
 		mobileactivationd_fixes();
 		return;
