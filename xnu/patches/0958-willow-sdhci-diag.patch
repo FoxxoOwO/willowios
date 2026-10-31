@@ -7,7 +7,7 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
  #define SDHCI_INT_ERROR         0x00008000u
  
 +static uint8_t g_sdhci_width = 0x24;
-+static uint16_t g_sdhci_div = 4;
++static uint16_t g_sdhci_div = 2;
 +static int g_sdhci_calib = 0;
 +
 +static void
@@ -116,12 +116,11 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
  }
  
  static int
-@@ -308,35 +404,43 @@
+@@ -308,35 +404,47 @@
  	uint32_t *p = (uint32_t *)buf;
  
  	while (cnt > 0) {
--		uint32_t chunk = MIN(cnt, 4096u);
-+		uint32_t chunk = 1; /* single sector transfers for maximum compatibility */
+ 		uint32_t chunk = MIN(cnt, 4096u);
  		unsigned wait_us = 0;
  		while (ufs_rd(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) {
 -			if (++wait_us > 5000000u) {
@@ -135,23 +134,17 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
  			delay(1);
  		}
  		ufs_wr(SDHCI_INT_STATUS, 0xffffffffu);
--		ufs_wr(SDHCI_BLOCK_SIZE, 512u | ((chunk & 0xffffu) << 16));
-+		ufs_wr(SDHCI_BLOCK_SIZE, 512u | (1u << 16));
+ 		ufs_wr(SDHCI_BLOCK_SIZE, 512u | ((chunk & 0xffffu) << 16));
  		ufs_wr(SDHCI_ARGUMENT, sector);
  
--		uint16_t mode = SDHCI_TRNS_BLK_CNT_EN | (write ? 0u : SDHCI_TRNS_READ);
--		uint16_t cmd_idx = write ? 24u : 17u;
--		if (chunk > 1) {
--			mode |= SDHCI_TRNS_MULTI | SDHCI_TRNS_AUTO_CMD12;
--			cmd_idx = write ? 25u : 18u;
--		}
--		uint16_t cmd = (uint16_t)((cmd_idx << 8) | 0x3au);
--		ufs_wr(SDHCI_TRANSFER_MODE, (uint32_t)mode | ((uint32_t)cmd << 16));
-+		uint32_t mode = SDHCI_TRNS_BLK_CNT_EN | (write ? 0u : SDHCI_TRNS_READ);
-+		uint32_t cmd_idx = write ? 24u : 17u;
-+		uint32_t cmd = ((cmd_idx << 8) | 0x3au);
-+
-+		ufs_wr(SDHCI_TRANSFER_MODE, mode | (cmd << 16));
+ 		uint16_t mode = SDHCI_TRNS_BLK_CNT_EN | (write ? 0u : SDHCI_TRNS_READ);
+ 		uint16_t cmd_idx = write ? 24u : 17u;
+ 		if (chunk > 1) {
+ 			mode |= SDHCI_TRNS_MULTI | SDHCI_TRNS_AUTO_CMD12;
+ 			cmd_idx = write ? 25u : 18u;
+ 		}
+ 		uint16_t cmd = (uint16_t)((cmd_idx << 8) | 0x3au);
+ 		ufs_wr(SDHCI_TRANSFER_MODE, (uint32_t)mode | ((uint32_t)cmd << 16));
 +		__builtin_arm_dsb(0xf);
  
  		wait_us = 0;
@@ -173,59 +166,42 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
  				sdhci_reset_lines(0x06);
  				return ETIMEDOUT;
  			}
-@@ -346,39 +450,51 @@
+@@ -346,39 +454,53 @@
  
  		uint32_t pmask = write ? SDHCI_SPACE_AVAILABLE : SDHCI_DATA_AVAILABLE;
  		uint32_t imask = write ? SDHCI_INT_SPACE_AVAIL : SDHCI_INT_DATA_AVAIL;
--		for (uint32_t s = 0; s < chunk; s++) {
--			wait_us = 0;
--			while (!(ufs_rd(SDHCI_PRESENT_STATE) & pmask) &&
--			       !(ufs_rd(SDHCI_INT_STATUS) & imask)) {
+ 		for (uint32_t s = 0; s < chunk; s++) {
+ 			wait_us = 0;
+ 			while (!(ufs_rd(SDHCI_PRESENT_STATE) & pmask) &&
+ 			       !(ufs_rd(SDHCI_INT_STATUS) & imask)) {
 -				if (ufs_rd(SDHCI_INT_STATUS) & SDHCI_INT_ERROR) {
--					sdhci_reset_lines(0x06);
--					return EIO;
-+		wait_us = 0;
-+		while (!(ufs_rd(SDHCI_PRESENT_STATE) & pmask) &&
-+		       !(ufs_rd(SDHCI_INT_STATUS) & imask)) {
-+			uint32_t is = ufs_rd(SDHCI_INT_STATUS);
-+			if (is & SDHCI_INT_ERROR) {
-+				if (!g_sdhci_calib) {
-+					printf("SDHCI: DATA error! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
++				uint32_t is = ufs_rd(SDHCI_INT_STATUS);
++				if (is & SDHCI_INT_ERROR) {
++					if (!g_sdhci_calib) {
++						printf("SDHCI: DATA error! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
++					}
+ 					sdhci_reset_lines(0x06);
+ 					return EIO;
  				}
 -				if (++wait_us > 5000000u) {
--					sdhci_reset_lines(0x06);
--					return ETIMEDOUT;
-+				sdhci_reset_lines(0x06);
-+				return EIO;
-+			}
-+			if (++wait_us > 2000000u) {
-+				if (!g_sdhci_calib) {
-+					printf("SDHCI: DATA avail timeout! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
++				if (++wait_us > 2000000u) {
++					if (!g_sdhci_calib) {
++						printf("SDHCI: DATA avail timeout! is=%#x pstate=%#x\n", is, ufs_rd(SDHCI_PRESENT_STATE));
++					}
+ 					sdhci_reset_lines(0x06);
+ 					return ETIMEDOUT;
  				}
--				delay(1);
--			}
--			ufs_wr(SDHCI_INT_STATUS, imask);
--			if (write) {
--				for (unsigned w = 0; w < 512u / 4u; w++) {
--					ufs_wr(SDHCI_BUFFER, *p++);
--				}
--			} else {
--				for (unsigned w = 0; w < 512u / 4u; w++) {
--					*p++ = ufs_rd(SDHCI_BUFFER);
--				}
-+				sdhci_reset_lines(0x06);
-+				return ETIMEDOUT;
-+			}
-+			delay(1);
-+		}
-+		ufs_wr(SDHCI_INT_STATUS, imask);
-+		if (write) {
-+			for (unsigned w = 0; w < 512u / 4u; w++) {
-+				ufs_wr(SDHCI_BUFFER, *p++);
-+			}
-+		} else {
-+			for (unsigned w = 0; w < 512u / 4u; w++) {
-+				*p++ = ufs_rd(SDHCI_BUFFER);
+ 				delay(1);
+ 			}
+ 			ufs_wr(SDHCI_INT_STATUS, imask);
+ 			if (write) {
+ 				for (unsigned w = 0; w < 512u / 4u; w++) {
+ 					ufs_wr(SDHCI_BUFFER, *p++);
+ 				}
+ 			} else {
+ 				for (unsigned w = 0; w < 512u / 4u; w++) {
+ 					*p++ = ufs_rd(SDHCI_BUFFER);
+ 				}
  			}
  		}
  
@@ -248,7 +224,7 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
  				break;
  			}
  			delay(1);
-@@ -660,18 +776,68 @@
+@@ -660,18 +782,68 @@
  {
  	if (su.sdhci) {
  		if (su.reg_size >= 0x2000u) {
@@ -296,9 +272,9 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
 +		int r_bw = sdhci_cmd_simple(6, (3u << 24) | (183u << 16) | (2u << 8), 0x1bu, NULL);
 +		printf("SWEET UFS: exit HS400 -> High Speed SDR: r_hs=%d r_bw=%d\n", r_hs, r_bw);
 +
-+		/* Configure host controller: 8-bit bus width, High-Speed, 1.8V, divider 4 (~25 MHz) */
++		/* Configure host controller: 8-bit bus width, High-Speed, 1.8V, divider 2 (~50 MHz) */
 +		g_sdhci_width = 0x24;
-+		g_sdhci_div = 4;
++		g_sdhci_div = 2;
 +		sdhci_set_config(g_sdhci_width, g_sdhci_div);
 +
 +		/* Test read sector 0 */
@@ -309,7 +285,7 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
 +			printf("SWEET UFS: 8-bit read failed (%d), falling back to 1-bit SDR...\n", err);
 +			sdhci_cmd_simple(6, (3u << 24) | (183u << 16) | (0u << 8), 0x1bu, NULL);
 +			g_sdhci_width = 0x04;
-+			g_sdhci_div = 4;
++			g_sdhci_div = 2;
 +			sdhci_set_config(g_sdhci_width, g_sdhci_div);
 +			err = sdhci_rw_sectors(0, 1, test_buf, false);
 +		}

@@ -637,6 +637,37 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 - **Next Hardware Acceleration Step (Adreno 610 `freedreno`)**:
   - `willow` (`SM6125`) uses the exact same Adreno 610 GPU (`chipid = 0x06010000`, `GPU_BASE = 0x05900000`, `GPUCC = 0x05990000`, `SMMU = 0x059a0000`) as `topaz`, with signed `willow` zap shader firmware already in [`firmware/willow/`](firmware/willow/) (`gpu_region` at `0x57515000`).
 
+## 2026-10-31: Analysis of `sweet-log26.txt` (`gui8`) & Multi-Block eMMC + SPI Touchscreen Fixes (`gui9`)
+
+### 1. Root Cause Analysis of Slowness in `sweet-log26.txt` (`115,552` B, `2,229` lines, `flush #68`)
+- **All Previous `gui8` Fixes Confirmed Working**:
+  - **4 CPU Cores Active**: `cpus=4` brought up all 4 Kryo 260 Gold cores (`0x100..0x103`, lines 60–115).
+  - **Red Veil (`vibrantColorMatrix`) Eliminated**: `topaz-gl: hooked CA::OGL::GLESContext function_supported + function_uniform -> nop` succeeded cleanly in `backboardd` (lines 791, 1791)!
+  - **Instant `blobs.bin` Unpack**: `SWEET BLOBS: 1 files unpacked` (line 532) finished in `<0.1 s` instead of `60+ s`.
+- **Three Exact Bottlenecks Identified in `sweet-log26.txt`**:
+  1. **Single-Sector eMMC Transfers (`chunk = 1`, `CMD17`/`CMD24`) at Half Clock (`div = 4`, 25 MHz) in [`0958-willow-sdhci-diag.patch`](xnu/patches/0958-willow-sdhci-diag.patch)**:
+     - Diagnostic code in `sdhci_rw_sectors()` forced `uint32_t chunk = 1;` (`CMD17` / `CMD24` single-sector 512B PIO transfers) and `g_sdhci_div = 4` (25 MHz) while holding the global `sweet_ufs_lock` mutex.
+     - Every 16 KB page fault (32 sectors) or 128 KB cluster read (256 sectors) issued 32 to 256 separate `CMD17` commands with command/response/FIFO/data-end overhead, resulting in ~1.2 million single-sector transactions and ~200 seconds of pure I/O wait during boot (`40× SWEET INTF1` between `Early boot complete` at line 554 and `present #2` at line 2033).
+     - Because processes blocked on `sweet_ufs_lock` during page faults, `SpringBoard` widget extensions (`BatteriesWidgetExtension`, `SleepWidgetExtension`, `ScreenTimeWidgetExtension`, `PhotosReliveWidget`, `AppStoreWidgetsExtension`) hit `extension check-in timeout` and spawned `ReportCrash` + `spindump`, further saturating eMMC I/O.
+  2. **Touchscreen Skipped Because `GENI_SE_SPI` Protocol ID on `SM6125` (`trinket`) Is `1` (`proto=1`), Not `2`**:
+     - Lines 632–633:
+       ```
+       SWEET TOUCH: se2 fw=0x101 proto=1 status=0 tx=0x20102864 rx=0x20104800 ios=0
+       SWEET TOUCH: need ABL-loaded SPI(2)/I2C(3) firmware and 32-bit FIFOs; probes skipped
+       ```
+     - On `SM6125` (`trinket`), `QUP0 SE2` (`0x04a88000`) reports `fw=0x101` (`proto=1` for `GENI_SE_SPI`), whereas `touch_se_init()` in [`0953-willow-touch-nt36672a-spi-ft8719.patch`](xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch) checked `proto == 2`.
+  3. **`sweetfb_hz=60` Uncached Framebuffer Copy Overhead**:
+     - Copying 10.1 MB per frame into uncached `0x5c000000` at 60 Hz (`600 MB/s`) from the kernel timer thread competes directly with `backboardd`'s `softpipe` renderer. Lowering `sweetfb_hz=20` frees CPU cycles for rendering and UI responsiveness.
+
+### 2. Fixes Applied in [`shim/out/shim-evox-boot-gui9.img`](shim/out/shim-evox-boot-gui9.img)
+1. **Multi-Block eMMC `CMD18`/`CMD25` (`SDHCI_TRNS_MULTI | SDHCI_TRNS_AUTO_CMD12`, `chunk = cnt`) + 50 MHz High-Speed SDR (`div = 2`)**:
+   - Patched `_sdhci_rw_sectors` (`0x528f04..0x529380`) and `_ufs_take_over_host` (`0x528188..0x528488`, `0x529490`) in [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet) and updated [`xnu/patches/0958-willow-sdhci-diag.patch`](xnu/patches/0958-willow-sdhci-diag.patch) so multi-sector reads/writes execute in a single `CMD18`/`CMD25` transaction with hardware `AUTO_CMD12` at 50 MHz (`div=2`).
+2. **Enabled `proto == 1` (`GENI_SE_SPI`) in `touch_se_init` + `sweettouchdelay=5`**:
+   - Patched `touch_se_init` (`0x530604..0x530618`) in [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet) and updated [`xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`](xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch) to accept `proto == 1` as `st.spi_mode = true` and start polling the Novatek NT36672A SPI touchscreen 5 seconds after boot (`sweettouchdelay=5`).
+3. **Throttled Framebuffer Copy (`sweetfb_hz=20`)**:
+   - Built [`xnu/out/payload-gui9.bin`](xnu/out/payload-gui9.bin) (`17,528,624` B) and [`shim/out/shim-evox-boot-gui9.img`](shim/out/shim-evox-boot-gui9.img) (`17,829,888` B).
+
+
 
 
 

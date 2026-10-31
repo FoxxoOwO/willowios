@@ -176,12 +176,12 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	    touch_rd(st.se, 0x908));
 -	if (((fw >> 8) & 0xffu) != 3u || (touch_rd(st.se, 0x64) & 1u) ||
 +	uint32_t proto = (fw >> 8) & 0xffu;
-+	st.spi_mode = (proto == 2u); /* 2 = GENI_SE_SPI (willow), 3 = GENI_SE_I2C (topaz) */
-+	if ((proto != 2u && proto != 3u) || (touch_rd(st.se, 0x64) & 1u) ||
++	st.spi_mode = (proto == 1u || proto == 2u); /* 1/2 = GENI_SE_SPI (willow), 3 = GENI_SE_I2C (topaz) */
++	if ((proto < 1u || proto > 3u) || (touch_rd(st.se, 0x64) & 1u) ||
  	    ((tx >> 24) & 0x3fu) != 32u || ((rx >> 24) & 0x3fu) != 32u ||
  	    ((tx >> 16) & 0x3fu) < 2u || ((rx >> 16) & 0x3fu) < 2u) {
 -		printf("SWEET TOUCH: need ABL-loaded I2C firmware and 32-bit FIFOs; probes skipped\n");
-+		printf("SWEET TOUCH: need ABL-loaded SPI(2)/I2C(3) firmware and 32-bit FIFOs; probes skipped\n");
++		printf("SWEET TOUCH: need ABL-loaded SPI(1/2)/I2C(3) firmware and 32-bit FIFOs; probes skipped\n");
  		return false;
  	}
  	if (touch_rd(st.se, SE_STATUS) & 0x1001u) {
