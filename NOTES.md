@@ -762,6 +762,41 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - [`xnu/out/payload-gui12.bin`](xnu/out/payload-gui12.bin) (`17,528,576` B).
    - [`shim/out/shim-evox-boot-gui12.img`](shim/out/shim-evox-boot-gui12.img) (`17,829,888` B).
 
+## 2026-10-31: Analysis of `sweet-log-gui12.txt` (`flush #28`, `2,158` lines) & Full Userland GPU Blobs (`gui13`)
+
+### 1. Major Milestone: Adreno 610 Hardware Completely Online!
+- Lines 240–250 in `sweet-log-gui12.txt`:
+  ```text
+  TopazGPU: powered: RBBM_STATUS 00000001
+  TopazGPU: zap: embedded firmware (6860 + 2096 bytes)
+  TopazGPU: zap: metadata at 0x64000000
+  TopazGPU: zap: init_image and mem_setup ok, copying the segment
+  TopazGPU: zap auth_and_reset: 0/0
+  TopazGPU: smmu: tables
+  TopazGPU: SMMU TTBR0 0000000064010000 SCTLR 000000e0 TCR 00800020 TCR2 00000061 IDR0 4c017e04 IDR2 00005511 sCR0 00200406 (identity)
+  TopazGPU: cp: SQE 31980 bytes, allocating ring
+  TopazGPU: cp: SQE at GPU 0x64020000, ring 0x64030000
+  TopazGPU: CP up (ME_INIT, SET_SECURE_MODE 0), core 600 MHz
+  TopazGPU: Adreno 610 ready, RedwoodGPU published
+  ```
+- With willow's signed firmware, TrustZone authentication succeeded (`auth_and_reset: 0/0`), Adreno 610 SMMU is configured, CP microcode engine is running at 600 MHz, and `RedwoodGPU` is published!
+
+### 2. Root Cause of Continued Slowness in `gui12`
+- Even though the kernel GPU driver was 100% ready, userland `backboardd` was missing `libtopaz-gl.dylib` and `libOSMesa.8.dylib`.
+- In `gui8`..`gui12`, `blobs-fast.bin` packaged ONLY `libtopaz-inject.dylib` (70 KB), assuming the other libraries persisted on `/private/var/tmp/`.
+- `topaz_inject.c` checked `topaz_gl_path()`: because `libtopaz-gl.dylib` was missing from `/private/var/tmp/`, `topaz_inject` returned immediately, never loaded the OpenGL ES driver, and CoreAnimation fell back to Mesa `softpipe` CPU software rendering.
+
+### 3. Fixes in [`shim/out/shim-evox-boot-gui13.img`](shim/out/shim-evox-boot-gui13.img)
+1. **Re-Packaged Full Userland GPU Blobs ([`scratch/blobs-full.bin`](scratch/blobs-full.bin), `13,606,032` B)**:
+   - [`scratch/gpu/libtopaz-gl.dylib`](scratch/gpu/libtopaz-gl.dylib) (`346,864` B)
+   - [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib) (`70,448` B)
+   - [`scratch/gpu/libOSMesa.8.dylib`](scratch/gpu/libOSMesa.8.dylib) (`13,188,272` B)
+   - Thanks to 50 MHz multi-block eMMC (`sdhci_rw_sectors`), unpacking 13.6 MB takes <1 second during boot.
+2. **Built Artifacts**:
+   - [`xnu/out/payload-gui13.bin`](xnu/out/payload-gui13.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui13.img`](shim/out/shim-evox-boot-gui13.img) (`31,365,120` B).
+
+
 
 
 
