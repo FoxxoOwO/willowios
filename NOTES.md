@@ -867,3 +867,23 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 4. **Sestavené artefakty**:
    - [`xnu/out/payload-gui15.bin`](xnu/out/payload-gui15.bin) (`31,064,000` B).
    - [`shim/out/shim-evox-boot-gui15.img`](shim/out/shim-evox-boot-gui15.img) (`31,363,072` B).
+
+## 2026-10-31: Analysis of `sweet-log-gui15.txt` & Immediate Touch + 60 Hz Refresh (`gui16`)
+
+### 1. Root Cause of Reported Issues in `gui15`
+1. **Dotyk nefungoval, protože byl zpožděn o 45 sekund (`sweettouchdelay=45`)**:
+   - V logu `sweet-log-gui15.txt` řádek 375: `SWEET TOUCH: starting in 45 s`.
+   - Vlákno ovladače dotyku provádí `touch_wait(delay_s * 1000u)`. Výchozí hodnota `delay_s` je v kódu 45 sekund!
+   - Uživatel zkoušel dotyk během prvních 10–30 sekund, kdy vlákno dotyku ještě spalo a vůbec neinicializovalo sběrnici SPI.
+   - Řešení: Nastavit `sweettouchdelay=1` v cmdline, aby se dotyk zapnul okamžitě po 1 sekundě od startu.
+2. **Pomalost systému způsobena throttlingem framebufferu na 20 Hz (`sweetfb_hz=20`) + startovací zátěží démonů**:
+   - V cmdline bylo dosud nastaveno `sweetfb_hz=20`, což omezovalo překreslování obrazovky na pouhých 20 FPS (trhaný, pomalý dojem).
+   - Během prvních 60 sekund launchd paralelně spouští ~30 démonů (`softwareupdated`, `identityservicesd`, `passd`, `assistantd`, `biomed`), což způsobuje dočasnou startovací špičku.
+   - Řešení: Zvýšit `sweetfb_hz=60` pro plynulý 60 FPS běh GUI.
+3. **Tlačítka hlasitosti**:
+   - V `gui15` byla tabulka prohozena, ale `backboardd` v době restartu teprve inicializoval runloop a nestihl otevřít `SweetHIDButtons` klienta (`flush #4` po několika sekundách).
+   - V `gui16` s `sweettouchdelay=1` a `sweetfb_hz=60` bude systém okamžitě interaktivní.
+
+### 2. Sestavené artefakty (`gui16`)
+- [`xnu/out/payload-gui16.bin`](xnu/out/payload-gui16.bin) (`31,064,000` B) s boot-args `sweetfb_hz=60 sweettouch=1 sweettouchdelay=1`.
+- [`shim/out/shim-evox-boot-gui16.img`](shim/out/shim-evox-boot-gui16.img) (`31,363,072` B).
