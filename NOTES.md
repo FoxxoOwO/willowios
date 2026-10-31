@@ -830,12 +830,40 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - [`xnu/out/payload-gui14.bin`](xnu/out/payload-gui14.bin) (`31,064,000` B).
    - [`shim/out/shim-evox-boot-gui14.img`](shim/out/shim-evox-boot-gui14.img) (`31,363,072` B).
 
+## 2026-10-31: Analysis of `sweet-log-gui14.txt` & Fixes for Inverted Volume Buttons + Touchscreen (`gui15`)
 
+### 1. Results from `gui14` (`sweet-log-gui14.txt`, 2,660 lines, flush #41)
+1. **Crashloop Suppression 100% Successful**:
+   - `topaz-inject: backboardd GL loaded successfully!`
+   - `topaz-inject: neutralized CollectionsPoster (sleeping)`
+   - `topaz-inject: neutralized homed (sleeping)`
+   - `topaz-inject: neutralized assetsd (sleeping)`
+   - Všechny dříve padající procesy byly úspěšně zachyceny před pádem; nevznikl jediný pádový report v `ReportCrash`, uvolnila se 4 jádra procesoru. Uživatel potvrdil zrychlení systému (*"už je trochu rychlejší"*).
+2. **Potvrzení prohozených tlačítek hlasitosti**:
+   - V logu:
+     - `SWEET KEYS: key=2 down=1 pon=0x2 gpio4:c110=0x1` (RESIN tlačítko)
+     - `SWEET KEYS: key=1 down=1 pon=0 gpio4:c110=0` (PMIC GPIO tlačítko)
+   - Uživatel hlásí: *"tlačítka hlasitosti jsou prohozená"*.
+   - Ve `SweetHIDButtons` pole spotřebitelských kódů definovalo index 1 jako `VolumeIncrement` (`0xe9`) a index 2 jako `VolumeDecrement` (`0xea`). Na willow je fyzické zapojení opačné (RESIN = Volume Up, GPIO = Volume Down).
+3. **Příčina nefunkčního dotyku**:
+   - V `gui14` bylo v boot-args nastaveno `sweettouch=0`.
+   - V `gui9` pokus o zapnutí dotyku vyvolal kernel panic na CPU 2: `Unhandled implementation specific error` (SError).
+   - **Root cause paniku**: V `sweet_touch.c` bylo mapování TLMM WEST provedeno s fixní velikostí `0x58000` (88 stránek, offsety `0x00000..0x57fff`). Willow používá pro dotyk NT36672A SPI IRQ pin GPIO 88 (`WILLOW_PIN_IRQ = 88u`). Offset registru pro GPIO 88 je `88 * 0x1000 = 0x58000` a IO registr `0x58004`. Přístup k `touch_gpio(WILLOW_PIN_IRQ)` tedy zasahoval **mimo namapovanou paměť**, což okamžitě vyvolalo hardwarový SError abort.
 
-
-
-
-
-
-
-
+### 2. Fixes Applied in [`shim/out/shim-evox-boot-gui15.img`](shim/out/shim-evox-boot-gui15.img)
+1. **Prohození HID kódů tlačítek hlasitosti**:
+   - V [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet) na offsetu `0x37de8`:
+     - Změněno `[0x30, 0xe9, 0xea, 0x40]` na `[0x30, 0xea, 0xe9, 0x40]`.
+   - V [`xnu/patches/0058-sweet-hid-event-services.patch`](xnu/patches/0058-sweet-hid-event-services.patch) upraveno pole `usages[]` tak, aby index 1 posílal `kHIDUsage_Csmr_VolumeDecrement` a index 2 `kHIDUsage_Csmr_VolumeIncrement`.
+2. **Oprava MMIO mapování TLMM WEST v dotykovém ovladači**:
+   - V [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet) na offsetech `0x53037c` a `0x53038c`:
+     - Instrukce načtení velikosti mapování změněny z `0x58000` na `0x100000` (1 MiB).
+     - `movz w20, #0x8000` -> `movz w20, #0` (`0x52800014`)
+     - `movk w20, #0x5, lsl #16` -> `movk w20, #0x10, lsl #16` (`0x72a00214`)
+   - Upraveny zdrojové patche [`xnu/patches/0083-topaz-touch-ft5452.patch`](xnu/patches/0083-topaz-touch-ft5452.patch) a [`xnu/patches/0084-topaz-touch-diag-panic.patch`](xnu/patches/0084-topaz-touch-diag-panic.patch).
+   - Nyní jsou registry GPIO 87 i GPIO 88 plně uvnitř namapovaného virtuálního rozsahu TLMM.
+3. **Povolení dotyku v boot-args**:
+   - Z `cmdline` odstraněno `sweettouch=0` a nahrazeno `sweettouch=1`.
+4. **Sestavené artefakty**:
+   - [`xnu/out/payload-gui15.bin`](xnu/out/payload-gui15.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui15.img`](shim/out/shim-evox-boot-gui15.img) (`31,363,072` B).

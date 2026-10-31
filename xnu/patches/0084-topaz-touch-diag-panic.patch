@@ -49,7 +49,7 @@ index 03064d7..c810ee9 100644
 +	st.stage = "map";
  	printf("SWEET TOUCH: mapping GCC/TLMM/SE2\n");
  	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
- 	st.west = ml_io_map(TOUCH_WEST_PA, 0x58000);
+ 	st.west = ml_io_map(TOUCH_WEST_PA, 0x100000);
 @@ -573,9 +587,15 @@ touch_thread(void *arg, wait_result_t result)
  		printf("SWEET TOUCH: MMIO mapping failed\n");
  		goto out;
