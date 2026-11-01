@@ -375,8 +375,9 @@ topaz_inject(void)
 		return;
 	}
 	if (name != NULL && strcmp(name, "ReportCrash") == 0) {
-		log_console("topaz-inject: neutralized ReportCrash (exit 0)\n");
-		exit(0);
+		log_console("topaz-inject: neutralized ReportCrash (sleeping)\n");
+		while (1) { usleep(1000000); }
+		return;
 	}
 	if (name != NULL && strcmp(name, "nanotimekitcompaniond") == 0) {
 		log_console("topaz-inject: neutralized nanotimekitcompaniond (sleeping)\n");

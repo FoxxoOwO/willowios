@@ -1027,3 +1027,34 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - xnu/out/payload-gui20.bin (31,064,000 B).
    - shim/out/shim-evox-boot-gui20.img (31,363,072 B).
    - Obraz nabootovan na zarizeni pres fastboot boot.
+
+
+## 2026-11-01: True Active-Low CS Toggling & Neutralize ReportCrash Loop (`gui21`)
+
+### 1. Zjisteni a analyza z logu `gui20`
+1. **Pomalost systemu a nekonecny restart-loop `ReportCrash`**:
+   - V `gui20` bylo neutralizovano cykleni `nanotimekitcompaniond` a `spindump` prepnutim na trvaly spanek (`FN_SLEEP_FOREVER`), coz uspesne zastavilo jejich restarty.
+   - Demon `ReportCrash` vsak mel v `libtopaz-inject.dylib` stale implementovano `exit(0)`. launchd pri kazdem padu libovolneho procesu spustil `ReportCrash`, ten udelal `exit(0)`, launchd jej okamzite znova nastartoval (vice nez 30x v logu), coz zpusobovalo pretizeni procesoru a pomalost celeho GUI.
+2. **Analyza sbernice SPI a radice Novatek NT36672A**:
+   - V `gui20` zpusobila inverze polarity (`spi-cs-high`), ze `trim` precetl `ff:ff:ff:ff:ff:ff` (cip byl behem prenosu odpojen a MISO plaval na logicke 1).
+   - V `gui19` a starsich verzich byl naopak CS trvale nastaven na LOW (`0`) ve vsech funkcich (`touch_se_init` i `touch_spi_xfer`), takze CS nikdy netoggloval do HIGH. Bez nabezne hrany CS slave cip NT36672A nikdy neresetoval svuj interni SPI parser a nezacal novy ramec prikazu (cteni vracelo same 0x00).
+   - Skutecne hardwarove zapojeni vyzaduje standardni **Active-Low CS**:
+     - V klidu (idle): CS = **HIGH** (1, deasserted).
+     - Pri prenosu (`touch_spi_xfer`): CS = **LOW** (0, asserted).
+     - Po skonceni prenosu a pri timeoutu: CS = **HIGH** (1, deasserted).
+
+### 2. Provedene opravy v `shim/out/shim-evox-boot-gui21.img`
+1. **Oprava polarity a togglovani Chip Select v [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet)**:
+   - `0x530bb0`: `8c 01 1f 32` (`orr w12, w12, #2`) -> CS v klidu HIGH (1).
+   - `0x5329c0`: `8c 79 1e 12` (`and w12, w12, #0xfffffffd`) -> CS pri prenosu stazen na LOW (0).
+   - `0x532c48`: `8c 01 1f 32` (`orr w12, w12, #2`) -> CS po prenosu vracen na HIGH (1).
+   - `0x532c94`: `8c 01 1f 32` (`orr w12, w12, #2`) -> CS pri timeoutu vracen na HIGH (1).
+   - Aktualizovan zdrojovy patch [`xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`](xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch).
+2. **Neutralizace `ReportCrash` restart-loopu**:
+   - V [`userland/gpu/topaz_inject.c`](userland/gpu/topaz_inject.c) i [`scratch/patch_inject.py`](scratch/patch_inject.py) zmenen handler `ReportCrash` z `exit(0)` na `FN_SLEEP_FOREVER`.
+   - Prepsany zpravy a instrukce, prepocitany SHA256 CodeDirectory hashe v [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib).
+   - Znovuzabalen [`scratch/blobs-full.bin`](scratch/blobs-full.bin) a vlozen do [`xnu/out/willow.adt`](xnu/out/willow.adt).
+3. **Sestavene artefakty (`gui21`)**:
+   - [`xnu/out/payload-gui21.bin`](xnu/out/payload-gui21.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui21.img`](shim/out/shim-evox-boot-gui21.img) (`31,363,072` B).
+   - Odeslano a nabootovano do zarizeni pres `fastboot boot`.
