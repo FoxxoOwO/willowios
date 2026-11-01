@@ -1440,3 +1440,58 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 - Ověřeno v recovery: touch_vddio = pm6125_l9 1.8 V (sdílené s DSI vddio), lab/ibb = PMI632 LCDB (sdílené s panelem). Mainline pinctrl-sm6125.c: GPIO 6,7,8,9,87,88 jsou WEST tile (0x500000), qup02 = funkce 1.
 - Ve starém logu Novatek trim ... 00:00:00:00:00:00 -> MISO vrací nuly, čip neodpovídá.
 - Postup pro log: po testu NErestartovat normálně, ale přidržet Vol+ a Power rovnou do recovery, pak scratch/pull_gui33_log.py.
+
+
+## 2026-11-01: Auto-Unlock Multi-Retry, Hardware SPI-CS-HIGH & True Novatek Initialization Sequence (gui34)
+
+### 1. Zjištění z reverzního inženýrství stock Linux kernelu a Device Tree
+1. **Příčina setrvání na Lock Screenu (chyba jednorázového odemčení)**:
+   - V `userland/gpu/topaz_inject.c` vlákno `sb_unlock_worker` čekalo pouze 4 sekundy a volalo `unlockUIFromSource:17` přesně **jednou**, načež okamžitě provedlo `break;` a vlákno skončilo.
+   - V čase t=4 s SpringBoard teprve startoval základní služby (`IOPMrootDomain`, `FBScene`), CoverSheet ještě nebyl plně prezentován a požadavek na odemčení zahodil.
+   - O 2 sekundy později CoverSheet zobrazil Lock Screen (hodiny a nápis Swipe up to unlock), ale `sb_unlock_worker` byl již ukončen a žádné další odemčení neposlal.
+   - **Oprava pro `gui34`**:
+     - Počáteční spánek prodloužen na 6 sekund.
+     - Zavedena smyčka s 10 opakováními po 2 sekundách (odemčení se zkouší v čase t=6, 8, 10, 12, 14, 16, 18, 20, 22, 24 s).
+     - Odstraněn předčasný `break`, takže volání se spolehlivě opakuje, dokud CoverSheet nezmizí na plochu (Home Screen).
+
+2. **Skutečná hardwarová konfigurace SPI a řadiče Novatek NT36672A**:
+   - Přímo z živého Device Tree (`/sys/firmware/devicetree/base/soc/spi@4a88000/touchpad`):
+     - Přítomna vlastnost `spi-cs-high` (Active High).
+     - Pinctrl uzel `qupv3_se2_spi_active` konfiguruje piny `gpio6, gpio7, gpio8, gpio9` do funkce `qup02`.
+     - V protokolu pro tento panel je tedy Chip Select **Active High** (v klidu LOW / 0, během přenosu HIGH / 1).
+     - V `gui33` byla polarita omylem invertována (klid HIGH, přenos LOW), takže čip byl během vysílání odpojen.
+
+3. **Přesná bootloaderová inicializační sekvence čipu Novatek NT36672A**:
+   - Z disassemblované funkce `nvt_ts_probe` (`0xffffff80089aa180`..`0xffffff80089aa220`) ve stock/recovery kernelu:
+     1. Zápis hodnoty `0x5a` na adresu `0x7fff80`:
+        - Nastavení stránky: `{0xff, 0xff, 0xff}` (3 B).
+        - Zápis registru: `{0x80, 0x5a}` (2 B).
+        - Čekání `10 ms`.
+     2. Bootloader soft-reset (zápis `0x69` na adresu `0x3f0fe`):
+        - Nastavení stránky: `{0xff, 0x07, 0xe1}` (3 B).
+        - Zápis registru: `{0xfe, 0x69}` (2 B).
+        - Čekání `35 ms`.
+     3. Zápis hodnoty `0x00` na adresu `0x3f310` (`spi-rd-fast-addr`):
+        - Nastavení stránky: `{0xff, 0x07, 0xe6}` (3 B).
+        - Zápis registru: `{0x90, 0x00}` (2 B).
+        - Čekání `5 ms`.
+     4. Obnovení stránky na 0:
+        - `{0xff, 0x00, 0x00}` (3 B).
+
+### 2. Provedené změny a sestavení (gui34)
+1. **Patch `scratch/gpu/libtopaz-inject.dylib`**:
+   - `0x4b88`: `mov w0, #6` (počáteční spánek 6 s).
+   - `0x4b90`: `mov w26, #10` (10 opakování).
+   - `0x4bc0`: `mov w0, #2` (pauza 2 s mezi pokusy).
+   - `0x4ce0`: `b 0x4bc0` (opakování volání `unlockUIFromSource:17`).
+   - Přepočítány a aktualizovány SHA256 hashe CodeDirectory.
+2. **Patch jádra `xnu/out/kernel.development.sweet`**:
+   - `0x530bb0`: `and w12, w12, #0xfffffffd` (CS klid LOW v `touch_init`).
+   - `0x5329c0`: `orr w12, w12, #2` (CS aktivní HIGH v `touch_spi_xfer`).
+   - `0x532c48` a `0x532c94`: `and w12, w12, #0xfffffffd` (CS návrat do LOW).
+   - `0x530c14`..`0x530cfc`: 59 instrukcí kompletní 4krokové stock inicializace čipu Novatek NT36672A.
+   - Ponechán `SE_MCLK = 0x21` (9,6 MHz) a spin-wait limit 500 µs (plná plynulost 60 FPS).
+3. **Sestavení a boot**:
+   - Znovuzabalen `scratch/blobs.bin` (15 364 144 B) a `xnu/out/willow.adt` (15 374 724 B).
+   - Sestaven `xnu/out/payload-gui34.bin` (32 822 112 B) a `shim/out/shim-evox-boot-gui34.img` (33 124 352 B).
+   - Obraz odeslán a spuštěn: `fastboot boot shim/out/shim-evox-boot-gui34.img`.
