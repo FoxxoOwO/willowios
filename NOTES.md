@@ -1352,3 +1352,42 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Sestaven správný `shim/out/shim-evox-boot-gui31.img` (33 124 352 B, `kp=294498`, `ramdisk=32821920`) příkazem:
      `python tools/pack_evox_boot.py shim/out/Image shim/out/shim-evox-boot-gui31.img --payload xnu/out/payload-gui31.bin`.
    - Obraz připraven k okamžitému odeslání přes `fastboot boot shim/out/shim-evox-boot-gui31.img`.
+
+
+## 2026-11-01: CRITICAL BREAKTHROUGH — Hardware SPI Active-High CS Polarity (spi-cs-high) & Verified Auto-Unlock (gui32)
+
+### 1. Zjištění z analýzy logu gui31 a inspekce živého hardware
+1. **Příčina nespuštění Auto-Unlocku v gui31 (chyba balení ADT)**:
+   - Při sestavení `gui31` byl skript `mkadt.py` zavolán s argumentem `--blobs scratch/blobs.bin` bez explicitního cílového souboru `xnu/out/willow.adt`.
+   - Skript `mkadt.py` interpretoval `scratch/blobs.bin` jako výstupní soubor, čímž přepsal `scratch/blobs.bin` a `xnu/out/willow.adt` ponechal v původním stavu (16:39, stará `libtopaz-inject.dylib` o velikosti 70 880 B).
+   - V `sweet-log-gui31.txt` řádek 325: `SWEET BLOBS: /private/var/tmp/libtopaz-inject.dylib, 70880 bytes: 0`.
+   - Nový kód s vláknem `sb_unlock_worker` (71 072 B) se tedy do telefonu v `gui31` vůbec nedostal.
+
+2. **Odhalení hlavní hardwarové příčiny nefunkčního dotyku (spi-cs-high)**:
+   - Přímou inspekcí Device Tree běžícího zařízení přes Recovery ADB zjištěno:
+     `/sys/firmware/devicetree/base/soc/spi@4a88000/touchpad/spi-cs-high` je **fyzicky přítomen**!
+   - Ve standardu Linux Device Tree vlastnost `spi-cs-high` definuje polaritu Chip Selectu jako **ACTIVE HIGH** (nikoliv standardní active low).
+   - V dosavadním kódu XNU `bsd/dev/sweet_touch.c` byla polarita nastavena opačně:
+     - Klidový stav (idle): HIGH (`1`)
+     - Aktivní přenos (active): LOW (`0`)
+   - V důsledku této chyby byl čip Novatek NT36672A během celého běhu v klidu trvale vybrán a při samotném vysílání hodin a dat naopak odpojen (deselected)! Čip tak nikdy nepřijal příkazy bootloaderu ani nevrátil data dotyku.
+   - Z DTB dále ověřeno: `spi-max-frequency = 8000000` (8 MHz). Dosavadní SPI dělička byla nastavena na 9,6 MHz (`0x21`).
+
+### 2. Provedené opravy v gui32
+1. **Oprava polarity Chip Select (Active High) v `xnu/out/kernel.development.sweet`**:
+   - `0x530bb0` (`touch_init`): `orr w12, w12, #2` -> `and w12, w12, #0xfffffffd` (klidový stav CS = LOW `0`).
+   - `0x5329c0` (`touch_spi_xfer` start): `and w12, w12, #0xfffffffd` -> `orr w12, w12, #2` (aktivní přenos CS = HIGH `1`).
+   - `0x532c48` (`touch_spi_xfer` konec): `orr w12, w12, #2` -> `and w12, w12, #0xfffffffd` (klidový stav CS = LOW `0`).
+   - `0x532c94` (`touch_spi_xfer` timeout): `orr w12, w12, #2` -> `and w12, w12, #0xfffffffd` (klidový stav CS = LOW `0`).
+   - `0x5307fc` (`SE_MCLK`): `mov w10, #0x21` (9,6 MHz) -> `mov w10, #0x41` (4,8 MHz, bezpečně pod 8 MHz limitem panelu).
+   - Všechny úpravy promítnuty do `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`.
+
+2. **Korektní regenerace ADT a zabalení nové verze `libtopaz-inject.dylib`**:
+   - Znovuzabalen `scratch/blobs.bin` (15 364 144 B) s novou `libtopaz-inject.dylib` (71 072 B, obsahuje `sb_unlock_worker`).
+   - Vygenerován `xnu/out/willow.adt` (15 374 724 B) příkazem:
+     `python tools/mkadt.py xnu/out/willow.adt --blobs scratch/blobs.bin`.
+   - Pythonem ověřena přítomnost a velikost v ADT hlavičce: `size=71072`.
+
+3. **Sestavení finálních artefaktů (gui32)**:
+   - Sestaven `xnu/out/payload-gui32.bin` (32 822 112 B) pomocí `tools/mkpayload.py`.
+   - Sestaven `shim/out/shim-evox-boot-gui32.img` (33 124 352 B, `kp=294498`, `ramdisk=32822112`) pomocí `tools/pack_evox_boot.py`.
