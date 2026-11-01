@@ -10,7 +10,7 @@ on:
     inputs:
       drivers:
         description: Mesa gallium drivers (softpipe, or softpipe,freedreno)
-        default: "softpipe"
+        default: "softpipe,freedreno"
   push:
     branches: [main]
     paths:
@@ -28,11 +28,11 @@ concurrency:
 
 env:
   MESA_VERSION: "25.0.7"
-  DRIVERS: ${{ inputs.drivers || 'softpipe' }}
+  DRIVERS: ${{ inputs.drivers || 'softpipe,freedreno' }}
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
