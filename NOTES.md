@@ -1259,3 +1259,31 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Sestaven xnu/out/payload-gui28.bin (31,064,000 B) pomocí tools/mkpayload.py.
    - Sestaven shim/out/shim-evox-boot-gui28.img (31,363,072 B) pomocí tools/pack_evox_boot.py.
    - Obraz úspěšně odeslán a nabootován na zařízení přes fastboot boot.
+
+
+## 2026-11-01: Fix XPC Deadlock (Unblock SpringBoard Present #2) & Clean Daemon Table (gui29)
+
+### 1. Zjištění z logu gui28 (sweet-log-gui25.txt / pstore, 2,312 řádků)
+1. Příčina černé obrazovky / nerozsvícení displeje v gui28:
+   - Po `present #1` (`SWEET FB: present #1 mask 0x80000007 consShown 0 paused 0 muted 0`) SpringBoard uvízl v synchronním Mach/XPC volání na `biomed` a `contextstored`.
+   - V `gui28` byli tito démoni zařazeni do seznamu uspávaných procesů (`while(1) usleep(1000000)`). Protože démoni nikdy neodpověděli na XPC IPC dotaz, SpringBoard zůstal trvale viset v `mach_msg_trap` na vlákně `t0` a nikdy nepředložil `present #2`.
+   - Z tohoto důvodu se displej nerozsvítil a systém zůstal ve stavu zhasnuté obrazovky.
+2. Závazné pravidlo stability XPC pro SpringBoard:
+   - Systémové démony, na jejichž synchronní odpovědi SpringBoard přímo závisí (`biomed`, `contextstored`, `duetexpertd`, `coreduetd`, `searchd`), je **striktně zakázáno uspávat**.
+   - Bezpečný a ověřený seznam zátěžových procesů pro neutralizaci: `CollectionsPoster`, `CollectionsPoste`, `homed`, `assetsd`, `bluetoothd`, `ReportCrash`, `nanotimekitcompaniond`, `spindump`.
+
+### 2. Provedené opravy v shim/out/shim-evox-boot-gui29.img
+1. Vyčištění tabulky démonů v `scratch/patch_inject.py`:
+   - Odstraněny systémové XPC služby (`biomed`, `contextstored`, `duetexpertd`, `coreduetd`, `searchd`, `mobileassetd`, `remoted`) ze `strings` i `daemons`.
+   - Ponechány pouze padající a zátěžové procesy: `CollectionsPoster`, `CollectionsPoste`, `homed`, `assetsd`, `bluetoothd`, `ReportCrash`, `nanotimekitcompaniond`, `spindump`.
+   - Přegenerována `scratch/gpu/libtopaz-inject.dylib` s aktualizovanými SHA256 hashi v CodeDirectory.
+2. Regenerace ADT a blobu:
+   - `scratch/blobs.bin` a `scratch/blobs-full.bin` znovuzabaleny přes `tools/mkblobs.py` (13,606,032 B).
+   - `xnu/out/willow.adt` přegenerován přes `tools/mkadt.py --blobs scratch/blobs.bin` (13,616,612 B).
+3. Verifikace dotyku Novatek NT36672A:
+   - Kernel binárka `xnu/out/kernel.development.sweet` má ověřený kód: reset GPIO 87, zpoždění 50 ms, SPI zápis `0x697e` na reg `0x7e`, zpoždění 60 ms, SPI zápis page 0, nastavení `st.irq_pin = 88` a `mov w9, #0x18000000` (full-duplex).
+4. Optimalizovaný boot cmdline a sestavení artefaktů:
+   - Cmdline zkrácen na 519 bajtů (bezpečně pod 608 B limit `BOOT_LINE_LENGTH`), zachovává `gl=force`.
+   - Sestaven `xnu/out/payload-gui29.bin` (31,064,000 B).
+   - Sestaven `shim/out/shim-evox-boot-gui29.img` (31,363,072 B).
+   - Obraz odeslán a nabootován do zařízení přes `fastboot boot shim/out/shim-evox-boot-gui29.img`.
