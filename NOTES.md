@@ -1229,3 +1229,33 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - xnu/out/payload-gui27.bin (31,064,000 B).
    - shim/out/shim-evox-boot-gui27.img (31,363,072 B).
    - Obraz odeslan a nabootovan do zarizeni pres fastboot boot.
+
+
+## 2026-11-01: Fix Novatek SPI Reset Opcode (0x697e), ADT Blobs Injection & Complete Daemon Neutralization (gui28)
+
+### 1. Zjištění z logu gui27 (sweet-log-latest.txt, 143,839 B) a reverzního inženýrství
+1. Příčina extrémní pomalosti (100% zátěž CPU nekonečnou smyčkou pádů CollectionsPoster):
+   - Log z gui27 odhalil 162 pádů CollectionsPoster se SIGABRT / sig 6 (Too many corpses being created). Launchd jej ihned po pádu znovu spouštěl ve smyčce ~100 ms.
+   - Analýza ADT potvrdila, proč oprava neutralizace v gui27 nezabrala: scratch/blobs-full.bin byl sice aktualizován, ale xnu/out/willow.adt nebyl přegenerován pomocí mkadt.py. V willow.adt tak stále zůstala stará libtopaz-inject.dylib z 11:29, která proces neuspala.
+2. Příčina nefunkčního dotyku (chybný operační kód zápisu soft resetu na Novatek SPI):
+   - V nvt_bootloader_reset čte/zapisuje Linux recovery kernel přes nvt_write_addr(0x3f0fe, 0x69).
+   - V protokolu Novatek SPI je registr na adrese (addr & 0x7f). Pro 0x3f0fe je to 0x7e. Nejvyšší bit (bit 7) indikuje READ (1) vs WRITE (0).
+   - V scratch/patch_kernel_touch.py byla instrukce movz w8, #0x69fe namísto 0x697e. Kvůli bitu 7 (0xfe namísto 0x7e) byl paket interpretován čipem jako čtení z 0x7e, nikoliv zápis. Příkaz software resetu 0x69 tak nebyl nikdy čipem přijat a čip zůstal uvízlý v bootloaderu.
+   - Po hardwarovém resetu GPIO 87 navíc čip vyžaduje minimálně 50-60 ms na dokončení startu firmwaru před přijetím touch reportů.
+
+### 2. Provedené opravy v shim/out/shim-evox-boot-gui28.img
+1. Oprava zápisu bootloader resetu Novatek NT36672A na SPI:
+   - V scratch/patch_kernel_touch.py změněn opkód na 0x528d2fc8 (movz w8, #0x697e: byte 0 = 0x7e WRITE, byte 1 = 0x69).
+   - Prodloužen delay po resetu na 60 ms (movz w0, #0xea60).
+   - Explicitně nastaven st.irq_pin = 88 (0x58) v [x27, #0x14].
+   - Patch aplikován do xnu/out/kernel.development.sweet na offset 0x530bc8..0x530d08.
+2. Neutralizace démonů a regenerace willow.adt:
+   - V scratch/patch_inject.py přidáni do daemons: CollectionsPoster, CollectionsPoste, homed, assetsd, bluetoothd, ReportCrash, nanotimekitcompaniond, spindump, contextstored, coreduetd, duetexpertd, searchd, biomed, mobileassetd, remoted.
+   - Znovuzabalen scratch/blobs.bin a scratch/blobs-full.bin (13,606,032 B) pomocí tools/mkblobs.py.
+   - Znovusestaven xnu/out/willow.adt (13,616,612 B) pomocí tools/mkadt.py --blobs scratch/blobs.bin.
+   - Verifikováno: blobs in adt: True, libtopaz-inject.dylib in adt: True.
+3. Optimalizace cmdline a sestavení artefaktů (gui28):
+   - Cmdline optimalizován na 591 bajtů (limit 608 B) včetně topaz_inject pro všechny zátěžové procesy a gl=force.
+   - Sestaven xnu/out/payload-gui28.bin (31,064,000 B) pomocí tools/mkpayload.py.
+   - Sestaven shim/out/shim-evox-boot-gui28.img (31,363,072 B) pomocí tools/pack_evox_boot.py.
+   - Obraz úspěšně odeslán a nabootován na zařízení přes fastboot boot.
