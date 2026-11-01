@@ -1189,3 +1189,43 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - xnu/out/payload-gui26.bin (31,064,000 B).
    - shim/out/shim-evox-boot-gui26.img (31,363,072 B).
    - Obraz odeslán a nabootován na zařízení přes fastboot boot.
+
+
+## 2026-11-01: True GENI SPI Opcode (3u << 27), Novatek Page Sequence & 30Hz FB Throttle (gui27)
+
+### 1. Zjisteni a analyza z dekompilace stock Recovery jadra (scratch/recovery_Image)
+1. Pricina nefunkcniho dotyku (chybny operacni kod prikazu GENI SPI):
+   - V ovladaci sweet_touch.c i v binarce kernel.development.sweet na adrese 0x5329fc byla instrukce mov w9, #0x38000000 ((7u << 27)).
+   - Kod 7 pochazi z I2C (I2C_READ). V radici Qualcomm GENI SPI vsak kod 7 neexistuje nebo je v FIFO rezimu neplatny.
+   - V Linuxovem ovladaci spi-geni-qcom.c (disassemblovano z spi_geni_transfer_one na 0xffffff800884ef60 a geni_setup_m_cmd na 0xffffff8008d88c80):
+     - 1 = CMD_TX_ONLY
+     - 2 = CMD_RX_ONLY
+     - 3 = CMD_FULL_DUPLEX ((3u << 27) = 0x18000000)
+   - Protoze byl vysilan neplatny kod prikazu 7, radic GENI SE2 SPI transfer nikdy nespustil, transfer pokazde vytuhnul na 10 ms (ETIMEDOUT) a vlakno touch_thread stravilo 100 % casu v zachranne smycce delay(1), aniz by precetlo jediny dotyk.
+2. Pricina nespravneho bootloader resetu Novatek NT36672A:
+   - V nvt_bootloader_reset (0xffffff80089aaf60) je adresa soft resetu 0x3f0fe:
+     - page_addr >> 15 = 0x07
+     - page_addr >> 7 = 0xe1
+     - Prikaz nastaveni stranky je tedy [0xff, 0x07, 0xe1].
+     - V puvodnim kodu bylo chybne zapsano [0xff, 0x7e, 0x01].
+3. Pricina pretrvavajici pomalosti a zahrivani:
+   - Framebuffer 1080x2340x4 ma 10,1 MB na snimek. Pri sweetfb_hz=60 kernel neustale kopiroval 606 MB/s pres necacheovanou systemovou sbernici RAM, coz dusilo CPU i pamet.
+   - Vlakno dotyku kvuli chybejicimu dokonceni transferu palilo 100 % jednoho jadra v delay(1) smyckach.
+   - Demon CollectionsPoster nebyl uspan kvuli chybejicimu koncovemu pismenu 'r' v tabulce pro strcmp, takze opakovane padal se SIGABRT (sig 6) a launchd jej neustale restartoval.
+
+### 2. Provedene opravy v shim/out/shim-evox-boot-gui27.img
+1. Oprava GENI SPI plneho duplexu na 0x18000000 ((3u << 27)):
+   - Offset 0x5329fc v xnu/out/kernel.development.sweet: 09 00 a7 52 (mov w9, #0x38000000) -> 09 00 a3 52 (mov w9, #0x18000000).
+   - Aktualizovan zdrojovy patch xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch.
+2. Oprava bootloader resetu cipu Novatek NT36672A:
+   - Offset 0x530c18..0x530c24: cmd_page nastaven na [0xff, 0x07, 0xe1].
+   - Aktualizovan skript scratch/patch_kernel_touch.py i zdrojovy patch 0953.
+3. Oprava neutralizace CollectionsPoster:
+   - V scratch/patch_inject.py pridan presny nazev CollectionsPoster do tabulky demonu.
+   - Prebalen scratch/blobs-full.bin (13,606,032 B) a vlozen do xnu/out/willow.adt (13,616,612 B).
+4. Odlehceni CPU a pametove sbernice (sweetfb_hz=30):
+   - V cmdline zmeneno sweetfb_hz=60 na sweetfb_hz=30 (snizeni datoveho toku z 606 MB/s na 303 MB/s).
+5. Sestavene artefakty (gui27):
+   - xnu/out/payload-gui27.bin (31,064,000 B).
+   - shim/out/shim-evox-boot-gui27.img (31,363,072 B).
+   - Obraz odeslan a nabootovan do zarizeni pres fastboot boot.
