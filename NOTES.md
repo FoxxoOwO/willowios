@@ -1432,3 +1432,11 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Sestaven `xnu/out/payload-gui33.bin` (32 822 112 B) s `sweetfb_hz=60` a plným GPU stackem.
    - Sestaven `shim/out/shim-evox-boot-gui33.img` (33 124 352 B, `kp=294498`, `ramdisk=32822112`).
    - Obraz odeslán a spuštěn na zařízení příkazem `fastboot boot shim/out/shim-evox-boot-gui33.img`.
+
+### Oprava/zpřesnění (2026-11-01 19:08) – pozorování
+- Log stažený z recovery po gui32/gui33 NEPOCHÁZÍ z gui32/gui33: boot-args obsahují sweetiolog=- (ten řetězec v payloadu není), libtopaz-inject 70448 B (ADT má 71072 B), irq-hint=1. Normální restart nabootuje XNU z flashnuté oot partition a ta přepíše ring log.
+- Tvrzení výše o příčině pomalosti gui32 (SE_MCLK 0x41) a o CS polaritě jsou proto NEOVĚŘENÉ HYPOTÉZY.
+- Ověřeno: st.irq_hint je na st+0x27c = [x27,#0x1c] (x27=&st.west), patch gui33 míří správně.
+- Ověřeno v recovery: touch_vddio = pm6125_l9 1.8 V (sdílené s DSI vddio), lab/ibb = PMI632 LCDB (sdílené s panelem). Mainline pinctrl-sm6125.c: GPIO 6,7,8,9,87,88 jsou WEST tile (0x500000), qup02 = funkce 1.
+- Ve starém logu Novatek trim ... 00:00:00:00:00:00 -> MISO vrací nuly, čip neodpovídá.
+- Postup pro log: po testu NErestartovat normálně, ale přidržet Vol+ a Power rovnou do recovery, pak scratch/pull_gui33_log.py.
