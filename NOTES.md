@@ -1164,3 +1164,28 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - xnu/out/payload-gui25.bin (31,064,000 B).
    - shim/out/shim-evox-boot-gui25.img (31,363,072 B).
    - Obraz nabootován na zařízení přes fastboot boot.
+
+
+## 2026-11-01: Fix XPC Deadlock, Restore gl=force & Add sweethidtest=3 (gui26)
+
+### 1. Zjištění z logu gui25 (sweet-log-gui25.txt, 77,738 B, 16.8 minut běhu):
+1. Proč telefon zůstal na černé obrazovce:
+   - AppleCLCD::present na present #1 vymazal framebuffer na černou (SWEET FB: present #1 mask 0x80000007 consShown 0 paused 0 muted 0).
+   - biomed, contextstored, duetexpertd byly v gui25 uspány nekonečnou smyčkou v konstruktoru libtopaz-inject.dylib.
+   - SpringBoard se při startu synchronně dotazuje na biomed (BiomeStreams) a contextstored (CoreDuet) přes XPC. Protože démoni neodpovídali, hlavní vlákno SpringBoard uvázlo na mach_msg_trap a nepředložilo druhý snímek (present #2).
+   - Seznam démonů v topaz_inject= přetekl limit 608 bajtů (zkrácen na mobileass), čímž vypadl příznak gl=force.
+   - Willow nemá fyzické tlačítko Home (0x40) a v cmdline chyběl sweethidtest=3 (test every 0 s), takže systém neobdržel probuzení z úvodní obrazovky Setup Assistantu.
+
+### 2. Provedené opravy v shim-evox-boot-gui26.img:
+1. Odstranění XPC systémových démonů z nekonečného spánku:
+   - V scratch/patch_inject.py ponechán pouze bezpečný a ověřený seznam zátěžových démonů:
+     CollectionsPoster, homed, assetsd, bluetoothd, ReportCrash, nanotimekitcompaniond, spindump.
+   - Znovuzabalen scratch/blobs-full.bin (13,606,032 B) a vložen do xnu/out/willow.adt (13,616,612 B).
+2. Přidán sweethidtest=3 a obnoven gl=force v cmdline:
+   - Cmdline zkrácen na 570 bajtů (pod 608 B):
+     debug=0xc serial=3 cpus=4 keepsyms=1 rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 launchd_unsecure_cache=1 wdt_test=no_user_checkin wdt=-1 ufsrw=1 rootrw=1 sweetfb_hz=60 sweettouch=1 sweettouchdelay=3 gpu=1 gpu_mhz=600 launchd_disable_all_timeouts=1 sweetfb_noconsole=1 sweetfb_stayon=1 sweethidtest=3 sweetiolog=- sweetsample=- sweetnull=- sweetscan=- topaz_inject=/private/var/tmp/libtopaz-inject.dylib,backboardd,containermanagerd,mobileactivationd,SpringBoard,CollectionsPoster,homed,assetsd,bluetoothd,ReportCrash,nanotimekitcompaniond,spindump gl=force
+   - SweetHIDButtons::testFired automaticky vysílá stisk a uvolnění klávesy Home (kHIDUsage_Csmr_Menu) každé 3 sekundy.
+3. Sestaveny artefakty (gui26):
+   - xnu/out/payload-gui26.bin (31,064,000 B).
+   - shim/out/shim-evox-boot-gui26.img (31,363,072 B).
+   - Obraz odeslán a nabootován na zařízení přes fastboot boot.
