@@ -1058,3 +1058,26 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - [`xnu/out/payload-gui21.bin`](xnu/out/payload-gui21.bin) (`31,064,000` B).
    - [`shim/out/shim-evox-boot-gui21.img`](shim/out/shim-evox-boot-gui21.img) (`31,363,072` B).
    - Odeslano a nabootovano do zarizeni pres `fastboot boot`.
+
+
+## 2026-11-01: CRITICAL BREAKTHROUGH — TLMM Base Address Fix (0x00400000 vs 0x00500000) (`gui22`)
+
+### 1. Zjisteni a analyza z logu `gui21` (flush #157, 138,216 B, 24+ minut behu)
+1. **Pricina zahrivani telefonu**:
+   - V logu `gui21` telefon bez preruseni bezel pres **24 minut** (289 zaznamu `SWEET INTF1: 320 frames in 5 s`, tj. displej renderoval plynule na 64 fps).
+   - CoreDuet procesy (`contextstored` 188 volani, `duetexpertd` 114 volani, `coreduetd` 81 volani) provadely masivni indexaci na pozadi. V kombinaci s vysokym fixnim taktem CPU bez dynamickeho DVFS governoru a neustalym vykreslovanim displeje doslo k prirozenemu zahrati zarizeni.
+2. **Klicovy objev: Chybna bazova adresa TLMM pro SM6125 (Trinket / Willow)**:
+   - Kod ovladace v `sweet_touch.c` pouzival definici `TOUCH_WEST_PA = 0x00500000u`, ktera pochazela z platformy Topaz (SM6225). Na SM6225 ma TLMM tri dlazdice (WEST na `0x500000`, SOUTH na `0x900000`, EAST na `0xd00000`).
+   - Podle primarniho Device Tree (`dtb/willow/dtb`, uzel `pinctrl@400000`, `compatible = qcom,trinket-pinctrl`, `reg = <0x00400000 0x00c00000>`) ma vsak SM6125 (Trinket) **jediny plochy prostor TLMM zacinajici na `0x00400000`** s offsety `0x1000 * id`.
+   - **Dusledek**: `st.west` byl namapovan na `0x00500000` (o 1 MiB vyse, do neexistujiciho prostoru pro GPIO > 256). Veskereré zapisy pro GPIO 6 (MISO), GPIO 7 (MOSI), GPIO 8 (SCLK), GPIO 9 (CS), GPIO 87 (RESET) a cteni GPIO 88 (IRQ) sly do prazdneho MMIO!
+   - Fyzicke piny procesoru nebyly NIKDY prepnuty na MUX 1 (QUP02 SPI), RESET pin na cipu Novatek se NIKDY nepohnul a Chip Select se fyzicky NIKDY nestahnul k zemi! Proto cip vubec nekomunikoval a vracel same nuly.
+
+### 2. Provedene opravy v `shim/out/shim-evox-boot-gui22.img`
+1. **Oprava bazove adresy TLMM v [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet)**:
+   - Offset `0x530424`: `00 0a a0 52` (`mov w0, #0x500000`) -> `00 08 a0 52` (`mov w0, #0x400000`).
+   - Offset `0x533a9c`: `00 0a a0 52` (`mov w0, #0x500000`) -> `00 08 a0 52` (`mov w0, #0x400000`).
+   - Aktualizovan zdrojovy patch [`xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`](xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch) (`#undef TOUCH_WEST_PA`, `#define TOUCH_WEST_PA 0x00400000u`).
+2. **Sestavene artefakty (`gui22`)**:
+   - [`xnu/out/payload-gui22.bin`](xnu/out/payload-gui22.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui22.img`](shim/out/shim-evox-boot-gui22.img) (`31,363,072` B).
+   - Odeslano a nabootovano do zarizeni pres `fastboot boot`.
