@@ -1060,7 +1060,40 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Odeslano a nabootovano do zarizeni pres `fastboot boot`.
 
 
-## 2026-11-01: CRITICAL BREAKTHROUGH — TLMM Base Address Fix (0x00400000 vs 0x00500000) (`gui22`)
+## 2026-11-01: CRITICAL BREAKTHROUGH — TLMM Base Address Fix & Panic Resolution (`gui23`)
+
+### 1. Zjisteni a analyza z fotografie obrazovky `gui22`
+1. **Pricina padu v `gui22` (zaseknuti na konzoli)**:
+   - Na fotografii obrazovky byl jasne patrny kernel panic:
+     ```text
+     SWEET TOUCH: mapping GCC/TLMM/SE2
+     SWEET TOUCH: gcc vote=0x5be0 rcg=0 cfg=0x100000 cbcr=0x4220
+     SWEET TOUCH: se2 fw=0x101 proto=1 status=0 tx=0x20102864 rx=0x20104800 ios=0
+     SWEET TOUCH: packing tx=0x7f8fe/0xffefe rx=0x7f8fe/0xffefe gran=0
+     SWEET TOUCH: TLMM reset=0 irq=0 avdd=0
+     Attempting to forcibly halt cpu 0
+     panic(cpu 2 caller 0xffffffe0007b8d864): Unhandled implementation specific error
+     ```
+   - **Root Cause**: Zmena bazove adresy TLMM WEST na `0x00400000` zpusobila Asynchronous/Synchronous External Abort (bus error na NoC), protoze na SM6125 (Snapdragon 665 / Trinket) jsou registry TLMM WEST mapovany az od `0x00500000` (`reg = <0x00500000 0x400000>`). Puvodni adresa `0x00500000` byla hardwarove spravna!
+
+2. **Overeni skutecneho dotykoveho hardware z beziciho zarizeni**:
+   - V Recovery jadre pres ADB zkontrolovan dmesg a `/proc/nvt_*`:
+     - Displej: `dsi_nt36672a_shenchao_vid_display` (Shenchao Novatek NT36672A).
+     - Dotykovy ovladac: `NVTCapacitiveTouchScreen` (`/devices/virtual/input/input1`), firmware verze 8 (`fw_ver=8, x_num=18, y_num=36, button_num=0`).
+     - Sbernice: QUP0 SE2 SPI (`0x04a88000`, `proto=1`, TX/RX FIFO 16 slov = 64 B).
+     - Piny v DTB: Reset = **GPIO 87** (`0x57`), IRQ = **GPIO 88** (`0x58`), CS = **GPIO 9**.
+     - V puvodnim kodu v `kernel.development.sweet` byl reset smerovan na GPIO 86 (`0x56004`), nikoli GPIO 87, a kompilator vynechal LOW resetovaci impuls.
+
+### 2. Provedene opravy v `shim/out/shim-evox-boot-gui23.img`
+1. **Oprava TLMM WEST base zpet na `0x00500000` v [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet)**:
+   - Offset `0x530424`: `00 08 a0 52` -> `00 0a a0 52` (`mov w0, #0x500000`).
+   - Offset `0x533a9c`: `00 08 a0 52` -> `00 0a a0 52` (`mov w0, #0x500000`).
+   - Aktualizovan zdrojovy patch [`xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`](xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch).
+2. **Sestavene artefakty (`gui23`)**:
+   - [`xnu/out/payload-gui23.bin`](xnu/out/payload-gui23.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui23.img`](shim/out/shim-evox-boot-gui23.img) (`31,363,072` B).
+   - Obraz uspesne odeslan a nabootovan na zarizeni pres `fastboot boot`.
+
 
 ### 1. Zjisteni a analyza z logu `gui21` (flush #157, 138,216 B, 24+ minut behu)
 1. **Pricina zahrivani telefonu**:

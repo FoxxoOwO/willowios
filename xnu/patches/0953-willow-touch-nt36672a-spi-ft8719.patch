@@ -9,7 +9,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  #define TOUCH_PIN_AVDD   36u
 +/* willow (Redmi Note 8T): spi@4a88000 (QUP0 SE2), reset GPIO87, IRQ GPIO88 (TLMM base 0x00400000) */
 +#undef TOUCH_WEST_PA
-+#define TOUCH_WEST_PA    0x00400000u /* willow (SM6125 Trinket): TLMM base at 0x00400000 */
++#define TOUCH_WEST_PA    0x00500000u /* willow (SM6125 Trinket): TLMM base at 0x00400000 */
 +#define WILLOW_PIN_RESET 87u
 +#define WILLOW_PIN_IRQ   88u
 +#define WILLOW_PIN_CS    9u
