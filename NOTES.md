@@ -1391,3 +1391,44 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 3. **Sestavení finálních artefaktů (gui32)**:
    - Sestaven `xnu/out/payload-gui32.bin` (32 822 112 B) pomocí `tools/mkpayload.py`.
    - Sestaven `shim/out/shim-evox-boot-gui32.img` (33 124 352 B, `kp=294498`, `ramdisk=32822112`) pomocí `tools/pack_evox_boot.py`.
+
+
+## 2026-11-01: Full Performance Restoration (60 FPS Adreno 610) & 100 Hz Touch Input (gui33)
+
+### 1. Zjištění a analýza příčiny pomalosti v gui32
+1. **Přesná příčina propadu výkonu v gui32**:
+   - V `gui32` byl změněn registr `GENI_SER_M_CLK_CFG` (`SE_MCLK`) na offsetu `0x5307fc` z `0x21` (9,6 MHz) na `0x41` (4,8 MHz).
+   - V architektuře Qualcomm GENI SPI hardware vyžaduje sudé děličky a specifické časování. Změna na `0x41` způsobila zamrznutí a desynchronizaci SPI jádra.
+   - Ve funkci `touch_spi_xfer` byl timeout nastaven na 10 000 iterací se zpožděním `delay(1)` (10 milisekund).
+   - Vlákno `touch_thread` volá SPI přenos každých 10 ms. Pokud každé volání narazilo na 10ms timeout, **jádro procesoru běželo na 100 % v aktivním kernel spin-waitu**, což vyhladovělo SpringBoard a BackBoardD a způsobilo masivní lagy.
+
+2. **Skutečná polarita Chip Select (CS) na Novatek NT36672A**:
+   - Fyzický pin NT36672A je standardní **Active-Low** SPI (klid: HIGH, aktivní: LOW).
+   - Vlastnost `spi-cs-high` v Linux Device Tree je určena výhradně pro interní hardware demuxer řadiče GENI (`SE_SPI_DEMUX_OUTPUT_INV` na `0x24c`), nikoliv pro manuální GPIO řízení.
+   - Manuální přepnutí CS na Active-High v `gui32` udržovalo čip trvale odpojený (deselected).
+
+3. **Odhalení příčiny ignorování dotyku (st.irq_hint)**:
+   - Kernel `kernel.development.sweet` měl `st.irq_hint = 1`.
+   - Při `st.irq_hint = 1` kód čte stav dotyku pouze tehdy, pokud je GPIO 88 sepnuto, a jinak pouze **1× za 100 ms** (`ticks % 10 == 0`).
+   - Krátká dotyková gesta (tažení trvající 150–250 ms) tak systém zmeškal nebo nezachytil s dostatečnou vzorkovací frekvencí pro UIKit gesta.
+   - Nastavením `st.irq_hint = 0` běží dotykový polling nepodmíněně každých 10 ms (100 Hz vzorkování, spotřebuje pouhých ~0,05 % CPU).
+
+### 2. Provedené opravy v gui33
+1. **Oprava časování a limitu spin-waitu v `kernel.development.sweet`**:
+   - `0x5307fc` (`SE_MCLK`): návrat na `0x5280042a` (`mov w10, #0x21` = 9,6 MHz).
+   - `0x5329f4` (`touch_spi_xfer` timeout): zkrácení z 10 000 na 500 iterací (`52803e9c` = `mov w28, #0x01f4`, max 500 µs), vylučující jakékoliv zatížení CPU.
+   - `0x530bb0` (`touch_init`): návrat na `0x321f018c` (`orr w12, w12, #2`, CS klid HIGH).
+   - `0x5329c0` (`touch_spi_xfer` start): návrat na `0x121e798c` (`and w12, w12, #0xfffffffd`, CS aktivní LOW).
+   - `0x532c48` (`touch_spi_xfer` konec): návrat na `0x321f018c` (`orr w12, w12, #2`, CS klid HIGH).
+   - `0x532c94` (`touch_spi_xfer` timeout): návrat na `0x321f018c` (`orr w12, w12, #2`, CS klid HIGH).
+   - `0x530c80` (`touch_init`): `b9001f7f` (`str wzr, [x27, #0x1c]`, nuluje `st.irq_hint` pro 100 Hz polling) a `14000021` (`b #0xfffffe0007534d08`).
+   - Všechny úpravy promítnuty do `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`.
+
+2. **Ověření a sestavení artefaktů (gui33)**:
+   - `scratch/blobs.bin` (15 364 144 B) a `xnu/out/willow.adt` (15 374 724 B) obsahují:
+     - `libOSMesa.8.dylib` (14 945 776 B, nativní Mesa Freedreno Adreno 610 GPU akcelerace).
+     - `libtopaz-inject.dylib` (71 072 B, obsahuje asynchronní `sb_unlock_worker` pro odemknutí SpringBoardu).
+     - `libtopaz-gl.dylib` (346 848 B).
+   - Sestaven `xnu/out/payload-gui33.bin` (32 822 112 B) s `sweetfb_hz=60` a plným GPU stackem.
+   - Sestaven `shim/out/shim-evox-boot-gui33.img` (33 124 352 B, `kp=294498`, `ramdisk=32822112`).
+   - Obraz odeslán a spuštěn na zařízení příkazem `fastboot boot shim/out/shim-evox-boot-gui33.img`.

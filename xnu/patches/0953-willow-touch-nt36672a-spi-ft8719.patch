@@ -49,7 +49,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
 +		return EBUSY;
 +	}
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true); /* CS active high (spi-cs-high) */
++	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS active low */
 +	delay(2);
 +	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
 +	touch_wr(st.se, SE_TX_LEN, len);
@@ -57,7 +57,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	touch_wr(st.se, SE_CMD, (3u << 27)); /* SPI_FULL_DUPLEX = 3 */
 +
 +	unsigned sent = 0, got = 0;
-+	for (unsigned iter = 0; iter < 10000; ++iter) {
++	for (unsigned iter = 0; iter < 500; ++iter) {
 +		uint32_t irq = touch_irq();
 +		while (sent < len && ((touch_rd(st.se, SE_TX_COUNT) & 0xfffffffu) < 8u)) {
 +			uint32_t w = 0;
@@ -78,13 +78,13 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		if ((irq & SE_DONE) && got >= len) {
 +			touch_wr(st.se, SE_IRQ_CLR, irq);
 +			delay(2);
-+			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS idle low */
++			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true); /* CS idle high */
 +			return 0;
 +		}
 +		delay(1);
 +	}
 +	touch_abort();
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS idle low */
++	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true); /* CS idle high */
 +	return ETIMEDOUT;
 +}
 +
@@ -194,7 +194,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 -	touch_wr(st.se, SE_MCLK, (2u << 4) | 1u);
 -	touch_wr(st.se, SE_SCL, (5u << 20) | (11u << 10) | 22u); /* 400 kHz */
 +	if (st.spi_mode) {
-+		touch_wr(st.se, SE_MCLK, (4u << 4) | 1u); /* 4.8 MHz SPI clock from 19.2 MHz XO (spi-max-frequency 8MHz) */
++		touch_wr(st.se, SE_MCLK, (2u << 4) | 1u); /* 9.6 MHz SPI clock from 19.2 MHz XO */
 +		touch_wr(st.se, 0x224, 0);                /* SE_SPI_CPHA = 0 */
 +		touch_wr(st.se, 0x22c, 0);                /* SE_SPI_LOOPBACK = 0 */
 +		touch_wr(st.se, 0x230, 0);                /* SE_SPI_CPOL = 0 */
@@ -219,7 +219,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_gpio(6, 1, 0, 3, false, false);                   /* SPI MISO */
 +		touch_gpio(7, 1, 0, 3, true, false);                    /* SPI MOSI */
 +		touch_gpio(8, 1, 0, 3, true, false);                    /* SPI SCLK */
-+		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS idle low (spi-cs-high) */
++		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);  /* CS idle high */
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
 +		delay(10000);
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);
