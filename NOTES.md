@@ -1495,3 +1495,44 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Znovuzabalen `scratch/blobs.bin` (15 364 144 B) a `xnu/out/willow.adt` (15 374 724 B).
    - Sestaven `xnu/out/payload-gui34.bin` (32 822 112 B) a `shim/out/shim-evox-boot-gui34.img` (33 124 352 B).
    - Obraz odeslán a spuštěn: `fastboot boot shim/out/shim-evox-boot-gui34.img`.
+
+
+## 2026-11-01: True TLMM Base 0x00400000 Hardware Touch & Safe SpringBoard Auto-Unlock (gui35)
+
+### 1. Zjištění a analýza příčin z běhu gui34
+1. **Analýza nefunkčního dotyku (chybná bázová adresa TLMM)**:
+   - V `sweet_touch.c` byla konstanta `TOUCH_WEST_PA` nastavena na `0x00500000u` (převzato ze Snapdragonu 732G `sweet`, kde je západní dlaždice posunuta o +0x100000).
+   - Čipset Snapdragon 665 (Trinket / `SM6125` na `willow`) však nemá oddělené dlaždice; v živém Device Tree (`/soc/pinctrl@400000`) má TLMM rozsah `<0x00400000 0x00c00000>` a všechny GPIO registry jsou indexovány od `0x00400000 + id * 0x1000`.
+   - V důsledku mapování `0x00500000` mířily veškeré hardwarové zápisy a čtení o 1 MB vedle:
+     - GPIO 87 (RESET) zapisoval na `0x00557000` místo `0x00457000` (čip Novatek NT36672A se fyzicky vůbec neresetoval).
+     - GPIO 9 (CS) zapisoval na `0x00509000` místo `0x00409000` (SPI Chip Select pin se nepohnul).
+     - GPIO 6, 7, 8 (SPI MOSI/MISO/CLK) se nenamuxovaly na funkci QUP0 SE2.
+     - GPIO 88 (IRQ) se četl z `0x00558000` místo `0x00458000`.
+   - **Oprava pro `gui35`**:
+     - V `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch` opraveno na `#define TOUCH_WEST_PA 0x00400000u`.
+     - V jádře `xnu/out/kernel.development.sweet` opraven offset `0x530424` z `0x52a00a00` (`mov w0, #0x500000`) na `0x52a00800` (`mov w0, #0x400000`). Nyní se `st.west` mapuje přímo na fyzickou bázi TLMM `0x00400000` a všechny piny přímo ovládají hardware.
+
+2. **Analýza pádu SpringBoardu (předčasné volání SBLockScreenManager)**:
+   - V logu `sweet-log-gui34.txt` padal SpringBoard opakovaně s `NSInternalInconsistencyException`:
+     `*** Assertion failure in +[SBLockScreenManager _sharedInstanceCreateIfNeeded:], SBLockScreenManager.m:330`
+     `*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'Unexpectedly created SBLockScreenManager before UIApplication instance was created.'`
+   - Vlákno `sb_unlock_worker` se po fixním čase pokusilo zavolat `[SBLockScreenManager sharedInstance]`, v té době však SpringBoard ještě nedokončil inicializaci a instance `[UIApplication sharedApplication]` byla `nil`. To vyvolalo neošetřenou výjimku, SIGABRT a restart SpringBoardu každých 6-8 sekund.
+   - **Oprava pro `gui35`**:
+     - V `userland/gpu/topaz_inject.c` bylo vlákno `sb_unlock_worker` upraveno tak, aby aktivně ve smyčce čekalo, dokud `[UIApplication sharedApplication] != nil`.
+     - Teprve po vytvoření instance `UIApplication` vyčká 3 sekundy na prezentaci rozhraní a až poté bezpečně a bez pádu odešle zprávu `unlockUIFromSource:17 withOptions:nil`.
+
+### 2. Provedené změny, sestavení a boot (gui35)
+1. **Zdrojový kód a GitHub Actions CI**:
+   - `userland/gpu/topaz_inject.c` a `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch` aktualizovány v commitu `443426c` a pushnuty do `origin/main`.
+   - Běh CI `gpu.yml` (run `41338410152`) úspěšně dokončen za 2 minuty 36 sekund.
+   - Stažena nová `libtopaz-inject.dylib` (71 072 B) obsahující bezpečný `sb_unlock_worker`.
+2. **Patch jádra**:
+   - Skript `scratch/apply_gui35_kernel_patch.py` patchnul `0x530424` v `xnu/out/kernel.development.sweet` na `mov w0, #0x400000`.
+3. **Sestavení balíčků**:
+   - `scratch/blobs.bin` zabalen pomocí `tools/mkblobs.py` (15 364 144 B).
+   - `xnu/out/willow.adt` přegenerován (15 374 724 B).
+   - Sestaven `xnu/out/payload-gui35.bin` (32 822 112 B) pomocí `tools/mkpayload.py`.
+   - Sestaven `shim/out/shim-evox-boot-gui35.img` (33 124 352 B) pomocí `tools/pack_evox_boot.py`.
+4. **Odeslání a spuštění**:
+   - Zařízení přepnuto z recovery do bootloaderu (`adb reboot bootloader`).
+   - Obraz nabootován přes `platform-tools/fastboot boot shim/out/shim-evox-boot-gui35.img` (OKAY 1.062s).
