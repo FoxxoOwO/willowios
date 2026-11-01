@@ -1348,5 +1348,7 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - `scratch/blobs.bin` zabalen pomocí `tools/mkblobs.py` (15 364 144 B).
    - `xnu/out/willow.adt` přegenerován (15 374 724 B).
    - Sestaven `xnu/out/payload-gui31.bin` (32 821 920 B) s optimalizovaným cmdline (519 B).
-   - Sestaven `shim/out/shim-evox-boot-gui31.img` (33 120 992 B) pomocí `tools/pack_evox_boot.py`.
+   - **Oprava balení boot obrazu**: Původní volání `pack_evox_boot.py` chybně zabalilo 32 MB payload jako kernel namísto `shim/out/Image`, což způsobilo zamrznutí na splash screenu.
+   - Sestaven správný `shim/out/shim-evox-boot-gui31.img` (33 124 352 B, `kp=294498`, `ramdisk=32821920`) příkazem:
+     `python tools/pack_evox_boot.py shim/out/Image shim/out/shim-evox-boot-gui31.img --payload xnu/out/payload-gui31.bin`.
    - Obraz připraven k okamžitému odeslání přes `fastboot boot shim/out/shim-evox-boot-gui31.img`.
