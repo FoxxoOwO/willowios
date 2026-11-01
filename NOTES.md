@@ -1142,3 +1142,25 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 3. Sestaveny artefakty (gui24):
    - xnu/out/payload-gui24.bin (31,064,000 B).
    - shim/out/shim-evox-boot-gui24.img (31,363,072 B).
+
+
+## 2026-11-01: Touch Success & Fix ASLR Relative Offsets in libtopaz-inject (gui25)
+
+### 1. Zjištění z logu gui24:
+1. Touch driver: Úspěch! 
+   SWEET TOUCH: selected Novatek NT36672A SPI, 1080x2340, poll=10ms irq-hint=1
+   SWEET HID: SweetHIDTouch open by IOHIDEventServiceUserClient -> 1
+   Hardwarový reset GPIO 87 i bootloader reset čipu Novatek NT36672A 100% proběhly a driver čte periodicky data ze sběrnice SPI!
+2. Proč systém zůstal na konzoli:
+   - V logu: CRASH mobileactivation[953] sig 11 ... far 0x57ce, CRASH biomed far 0x57ce, CRASH contextstored far 0x57ce.
+   - Příčina: Tabulka démonů na 0x5500 obsahovala absolutní offsety (0x57ce) namísto relativních adres vůči PC. V procesech s ASLR způsobil pokus o čtení z virtuální adresy 0x57ce (nultá stránka) okamžitý pád na SIGSEGV (sig 11). Proto padaly i SpringBoard a mobileactivationd a systém nepřešel do GUI.
+
+### 2. Provedené opravy v shim-evox-boot-gui25.img:
+1. Pozicně nezávislá tabulka (PIC / PIE) v libtopaz-inject.dylib:
+   - Tabulka na 0x5500 nyní obsahuje 32bitové relativní signed offsety (rel_off = str_addr - entry_addr).
+   - Smyčka používá ldrsw x1, [x20] a dd x1, x20, x1, což při libovolném ASLR slide vypočte přesnou virtuální adresu řetězce v paměti procesu.
+   - Ukončení 0 (NULL).
+2. Sestaveny artefakty (gui25):
+   - xnu/out/payload-gui25.bin (31,064,000 B).
+   - shim/out/shim-evox-boot-gui25.img (31,363,072 B).
+   - Obraz nabootován na zařízení přes fastboot boot.
