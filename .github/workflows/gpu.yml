@@ -56,7 +56,7 @@ jobs:
             userland/mesa/build-mesa/build-softpipe-freedreno
             userland/mesa/build-mesa/build-softpipe
             userland/mesa/build-mesa/venv
-          key: mesa-${{ env.MESA_VERSION }}-${{ env.DRIVERS }}-${{ hashFiles('userland/mesa/*.patch', 'userland/mesa/redwood-drm/*') }}
+          key: mesa-${{ env.MESA_VERSION }}-softpipe-freedreno-${{ hashFiles('userland/mesa/*.patch', 'userland/mesa/redwood-drm/*') }}
 
       - name: Build Mesa (OSMesa, GLES profile, ${{ env.DRIVERS }})
         run: |
