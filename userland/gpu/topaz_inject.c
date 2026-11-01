@@ -19,6 +19,8 @@
 #include <execinfo.h>
 #include <sys/ucontext.h>
 #include <objc/runtime.h>
+#include <objc/message.h>
+#include <pthread.h>
 #include <mach/mach.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -314,9 +316,41 @@ sb_snapshot_output_format(__unused id self, __unused SEL _cmd, __unused id snaps
 	return 0;
 }
 
+static void *
+sb_unlock_worker(void *arg)
+{
+	(void)arg;
+	/* Wait for SpringBoard UI to settle (present #1/#2, lock screen visible) */
+	sleep(4);
+	for (int retry = 0; retry < 5; retry++) {
+		Class lsm = objc_getClass("SBLockScreenManager");
+		if (lsm) {
+			id mgr = ((id (*)(id, SEL))objc_msgSend)(lsm, sel_registerName("sharedInstance"));
+			if (mgr) {
+				SEL sel = sel_registerName("unlockUIFromSource:withOptions:");
+				if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), sel)) {
+					((void (*)(id, SEL, int, id))objc_msgSend)(mgr, sel, 17, nil);
+					log_console("topaz-inject: SpringBoard unlocked via unlockUIFromSource:17\n");
+					break;
+				}
+				SEL sel2 = sel_registerName("attemptUnlockWithPasscode:finishUIUnlock:completion:");
+				if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), sel2)) {
+					((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(mgr, sel2, nil, YES, nil);
+					log_console("topaz-inject: SpringBoard unlocked via attemptUnlockWithPasscode\n");
+					break;
+				}
+			}
+		}
+		sleep(1);
+	}
+	return NULL;
+}
+
 static void
 springboard_fixes(void)
 {
+	pthread_t t;
+	pthread_create(&t, NULL, sb_unlock_worker, NULL);
 	Class c1 = objc_getClass("SBLockdownManager");
 	Method m1 = c1 ? class_getInstanceMethod(c1, sel_registerName("_setupActivationState")) : NULL;
 	if (m1 != NULL) {
