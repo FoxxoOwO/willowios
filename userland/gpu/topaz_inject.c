@@ -320,9 +320,25 @@ static void *
 sb_unlock_worker(void *arg)
 {
 	(void)arg;
+	/* Wait until UIApplication instance is created and running to avoid
+	 * NSInternalInconsistencyException: 'Unexpectedly created SBLockScreenManager
+	 * before UIApplication instance was created.' */
+	Class uia = NULL;
+	for (int wait = 0; wait < 60; wait++) {
+		sleep(1);
+		if (!uia) {
+			uia = objc_getClass("UIApplication");
+			if (!uia) continue;
+		}
+		id app = ((id (*)(id, SEL))objc_msgSend)(uia, sel_registerName("sharedApplication"));
+		if (app != nil) {
+			log_console("topaz-inject: UIApplication instance ready\n");
+			break;
+		}
+	}
 	/* Wait for SpringBoard UI to settle (present #1/#2, lock screen visible) */
-	sleep(4);
-	for (int retry = 0; retry < 5; retry++) {
+	sleep(3);
+	for (int retry = 0; retry < 10; retry++) {
 		Class lsm = objc_getClass("SBLockScreenManager");
 		if (lsm) {
 			id mgr = ((id (*)(id, SEL))objc_msgSend)(lsm, sel_registerName("sharedInstance"));
@@ -341,7 +357,7 @@ sb_unlock_worker(void *arg)
 				}
 			}
 		}
-		sleep(1);
+		sleep(2);
 	}
 	return NULL;
 }
