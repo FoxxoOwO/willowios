@@ -21117,8 +21117,8 @@
 +sweet_hid_key(int key, int down)
 +{
 +	static const UInt32 usages[] = {
-+		kHIDUsage_Csmr_Power, kHIDUsage_Csmr_VolumeDecrement,
-+		kHIDUsage_Csmr_VolumeIncrement, kHIDUsage_Csmr_Menu,
++		kHIDUsage_Csmr_Power, kHIDUsage_Csmr_VolumeIncrement,
++		kHIDUsage_Csmr_VolumeDecrement, kHIDUsage_Csmr_Menu,
 +	};
 +
 +	if (gSweetButtons && key >= 0 && key < (int)(sizeof(usages) / sizeof(usages[0]))) {

@@ -97,7 +97,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	tx_buf[0] = addr & 0x7fu; /* SPI_READ_MASK */
 +	int err = touch_spi_xfer(tx_buf, rx_buf, len + 2);
 +	if (!err) {
-+		memcpy(rx, rx_buf + 2, len);
++		memcpy(rx + 1, rx_buf + 2, len);
 +	}
 +	return err;
 +}
@@ -212,13 +212,16 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	if (st.spi_mode) {
 +		/* willow: Novatek NT36672A SPI on QUP0 SE2 (GPIO 6/7/8 mux=1, GPIO 9 manual CS, reset 87, IRQ 88) */
 +		st.irq_pin = WILLOW_PIN_IRQ;
++		st.irq_hint = 0;
 +		touch_gpio(WILLOW_PIN_IRQ, 0, 3, 3, false, false);
 +		touch_gpio(6, 1, 0, 3, false, false);                   /* SPI MISO */
 +		touch_gpio(7, 1, 0, 3, true, false);                    /* SPI MOSI */
 +		touch_gpio(8, 1, 0, 3, true, false);                    /* SPI SCLK */
 +		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);         /* SPI CS0 high */
++		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
++		touch_wait(10);
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);
-+		touch_wait(20);
++		touch_wait(60);
 +		uint8_t trim[8] = { 0 };
 +		(void)touch_nvt_set_page(0x1f64eu);
 +		int ne = touch_nvt_spi_read(0x4eu, trim, 6);

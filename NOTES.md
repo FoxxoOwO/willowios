@@ -970,3 +970,31 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 3. **Sestavené artefakty (`gui18`)**:
    - [`xnu/out/payload-gui18.bin`](xnu/out/payload-gui18.bin) (`31,064,000` B).
    - [`shim/out/shim-evox-boot-gui18.img`](shim/out/shim-evox-boot-gui18.img) (`31,363,072` B).
+
+
+## 2026-11-01: Novatek SPI Touch Off-by-One Fix, Volume Key Polarity, CPU Churn Neutralization (`gui19`)
+
+### 1. Zjištění a analýza z `sweet-log-latest.txt` (běh `gui18`, flush #35)
+1. **Falešný a zaseknutý dotyk na hraně (`touch 0 down at 1079,1513 edge`)**:
+   - V `sweet-log-latest.txt`: ihned po startu driveru vygenerován falešný bod `touch 0 down at 1079,1513 edge` a žádný další event.
+   - Příčina: `memcpy(rx, rx_buf + 2, len)` uložil data na `buf[0]`. Parser v assembleru však četl data od `[x9, #-0xd]` (`buf[1]`), takže první bod byl posunut o 1 bajt. Bajt X-souřadnice byl vyhodnocen jako ID a status (`0x09` -> ID=1, status=1 = down).
+   - Výsledek: UIKit a SpringBoard vyhodnotily tento stisk jako trvale držený dotyk na okraji obrazovky, čímž zablokovaly jakékoli další dotykové události a gesta v celém systému.
+2. **Prohozená tlačítka hlasitosti**:
+   - V `gui18` bylo namapování: `key 1` = `0xea` (Vol-), `key 2` = `0xe9` (Vol+). Uživatel mačkal fyzické tlačítko nahoře (`key 1`) a systém snižoval hlasitost.
+3. **Pomalost systému a CPU zátěž**:
+   - launchd každé 2 sekundy spouštěl `nanotimekitcompaniond` a `spindump`, které spotřebovávaly CPU cykly.
+
+### 2. Provedené opravy v [`shim/out/shim-evox-boot-gui19.img`](shim/out/shim-evox-boot-gui19.img)
+1. **Oprava posunu bufferu dotyku v [`xnu/out/kernel.development.sweet`](xnu/out/kernel.development.sweet)**:
+   - Offset `0x531508`: opraven cíl `memcpy` z `add x0, sp, #0x1d0` na `add x0, sp, #0x1d1` (`e0 47 07 91`). Data jsou nyní přesně zarovnána s parserem `buf[1 + 6 * i]`.
+   - Offset `0x53143c`: `b #0x531494` (`16 00 00 14`) + `nop` (`1f 20 03 d5`) pro kontinuální čtení v každém 10ms polling cyklu.
+2. **Korektní orientace tlačítek hlasitosti**:
+   - Offset `0x37de8`: změněno pořadí kláves v tabulce na `[0x30, 0xe9, 0xea, 0x40]` (index 1 = `0xe9` Vol+, index 2 = `0xea` Vol-).
+3. **Neutralizace `nanotimekitcompaniond` a `spindump`**:
+   - Do [`userland/gpu/topaz_inject.c`](userland/gpu/topaz_inject.c) a [`scratch/gpu/libtopaz-inject.dylib`](scratch/gpu/libtopaz-inject.dylib) přidána detekce a okamžitý `exit(0)`.
+   - Znovuzabalen [`scratch/blobs-full.bin`](scratch/blobs-full.bin) (13,606,032 B) obsahující plný GPU stack (`libtopaz-gl.dylib`, `libtopaz-inject.dylib`, `libOSMesa.8.dylib`).
+   - Přegenerován [`xnu/out/willow.adt`](xnu/out/willow.adt) s novými bloby.
+   - Aktualizován cmdline o `nanotimekitcompaniond,spindump` do `topaz_inject`.
+4. **Sestavené artefakty (`gui19`)**:
+   - [`xnu/out/payload-gui19.bin`](xnu/out/payload-gui19.bin) (`31,064,000` B).
+   - [`shim/out/shim-evox-boot-gui19.img`](shim/out/shim-evox-boot-gui19.img) (`31,363,072` B).

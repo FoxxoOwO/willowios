@@ -378,6 +378,12 @@ topaz_inject(void)
 		log_console("topaz-inject: neutralized ReportCrash (exit 0)\n");
 		exit(0);
 	}
+	if (name != NULL && strcmp(name, "nanotimekitcompaniond") == 0) {
+		exit(0);
+	}
+	if (name != NULL && strcmp(name, "spindump") == 0) {
+		exit(0);
+	}
 	if (name != NULL && strcmp(name, "mobileactivationd") == 0) {
 		mobileactivationd_fixes();
 		return;
