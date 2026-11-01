@@ -1287,3 +1287,38 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Sestaven `xnu/out/payload-gui29.bin` (31,064,000 B).
    - Sestaven `shim/out/shim-evox-boot-gui29.img` (31,363,072 B).
    - Obraz odeslán a nabootován do zařízení přes `fastboot boot shim/out/shim-evox-boot-gui29.img`.
+
+
+## 2026-11-01: Full Freedreno Hardware GPU Acceleration & Correct Novatek SPI Write Opcode (gui30)
+
+### 1. Zjištění z logu gui29 (sweet-log-gui25.txt / pstore, 3,938 řádků)
+1. **Přesná příčina extrémní pomalosti (4,2 sekundy na jeden snímek)**:
+   - Log z gui29 potvrdil dokončení startu do GUI a vykreslení více než 100 snímků:
+     `|backboardd| redwood-gl: frame 100: 78 GL calls, 6 draws, 12 triangles, 4 clears; ... 4216148 us`
+   - Každý snímek trval **4 216 148 µs (~4,2 sekundy)**!
+   - Příčina: Doteď používaná `libOSMesa.8.dylib` (13,1 MB) obsahovala výhradně CPU rasterizér Gallium `softpipe`. CoreAnimation a backboardd tak musely každý pixel 1080×2340 rastrovat a transformovat na procesoru.
+   - Dosavadní CI workflow `gpu.yml` mělo nastaveno `default: "softpipe"` a nikdy Freedreno nekompilovalo.
+2. **Nefunkční dotyk (reverzní inženýrství protokolu Novatek SPI)**:
+   - Ve specifikaci Novatek SPI protokolu je nejvyšší bit (bit 7) příkazového bajtu `SPI_WRITE_MASK(a) = (a | 0x80)`.
+   - V oficiálním Xiaomi Device Tree `dtbo-willow.dtb` je vlastnost:
+     `novatek,swrst-n8-addr: 0x0003f0fe` (kde nejnižší bajt je `0xFE`).
+   - `0xFE` vzniká jako `0x7E | 0x80` (zápis do registru `0x7E`).
+   - V `gui28` a `gui29` byla instrukce chybně změněna na `0x697e` (bit 7 = 0, což čip interpretuje jako READ). Čip proto příkaz software resetu ignoroval a zůstal v bootloaderu.
+
+### 2. Provedené opravy v shim/out/shim-evox-boot-gui30.img
+1. **Sestavení plného Mesa Freedreno GPU stacku v CI**:
+   - Aktualizován runner v `.github/workflows/gpu.yml` na `macos-15` (vyřešena deprecace `macos-14`).
+   - Opraven klíč v `actions/cache@v4` (odstraněna čárka ze jména).
+   - Aktivovány Gallium drivery `softpipe,freedreno` s `freedreno-kmds=msm`.
+   - Úspěšný běh CI run 41321823426 (2m 42s). Sestavena a stažena `libOSMesa.8.dylib` (14 945 776 B, +1,8 MB), obsahující kompletní Freedreno Adreno 6xx driver, MSM DRM překladač na `RedwoodGPU` IOKit rozhraní a hardwarové shadery ir3.
+   - Stažena nově zkompilovaná `libtopaz-inject.dylib` (70 880 B) i `libtopaz-gl.dylib` (346 848 B).
+2. **Oprava soft reset opkódu pro dotykový čip Novatek NT36672A**:
+   - V `scratch/patch_kernel_touch.py` nastavena instrukce `0x528d3fc8` (`movz w8, #0x69fe`, byte 0 = `0xfe` WRITE, byte 1 = `0x69`).
+   - Zachován delay 60 ms pro boot firmwaru a `st.irq_pin = 88` (TLMM WEST `0x00500000`).
+   - Aplikováno do `xnu/out/kernel.development.sweet`.
+3. **Přebalení artefaktů (gui30)**:
+   - `scratch/blobs.bin` zabalen s novými Freedreno knihovnami (15 363 952 B).
+   - `xnu/out/willow.adt` přegenerován (15 374 532 B).
+   - Vygenerován `xnu/out/payload-gui30.bin` (32 821 920 B).
+   - Sestaven `shim/out/shim-evox-boot-gui30.img` (33 120 992 B).
+   - Obraz odeslán a nabootován do telefonu přes `fastboot boot`.
