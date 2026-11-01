@@ -1322,3 +1322,31 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - Vygenerován `xnu/out/payload-gui30.bin` (32 821 920 B).
    - Sestaven `shim/out/shim-evox-boot-gui30.img` (33 120 992 B).
    - Obraz odeslán a nabootován do telefonu přes `fastboot boot`.
+   - **Výsledek**: Plná hardwarová akcelerace Adreno 610 funkční, GUI naprosto plynulé (60 Hz). Uživatel potvrdil zobrazení Lock Screenu, ale dotyk na tažení nereaguje.
+
+
+## 2026-11-01: Programmatic SpringBoard Auto-Unlock from Lock Screen & Build Artifacts (gui31)
+
+### 1. Zjištění a analýza chování Lock Screenu
+1. **Proč je systém na Lock Screenu a ne v Setup Assistantu**:
+   - `libtopaz-inject.dylib` záměrně implementuje hook `-[SBSetupManager _setSetupRequiredReason:] -> 0`, který přeskočí průvodce nastavením (Setup Assistant). Bez SEP koprocesoru by se průvodce zacyklil.
+   - Po přeskočení Setupu startuje SpringBoard do standardního zamčeného stavu (Lock Screen s velkými hodinami).
+   - Modelový profil zařízení je iPhone X (`D22AP`, bez Home buttonu), který standardně vyžaduje odemknutí gestem tažení z dolního okraje nahoru (swipe-up). Willow nemá fyzický Home button (tlačítko 0x40 / `Menu` z `sweethidtest` na moderní CoverSheet nereaguje).
+2. **Programatické odemknutí SpringBoardu (Auto-Unlock)**:
+   - V `userland/gpu/topaz_inject.c` bylo do `springboard_fixes()` přidáno asynchronní vlákno `sb_unlock_worker`.
+   - Vlákno vyčká 4 sekundy na dokončení inicializace SpringBoardu a vykreslení Lock Screenu (`present #1/#2`).
+   - Následně získá `[SBLockScreenManager sharedInstance]` a odešle zprávu `unlockUIFromSource:17 withOptions:nil` (případně `attemptUnlockWithPasscode:finishUIUnlock:completion:`).
+   - Tato interní SpringBoard metoda provede přímou animaci odemknutí a otevře domovskou plochu s ikonami aplikací (Home Screen) bez nutnosti fyzického dotyku.
+
+### 2. Provedené změny a sestavení (gui31)
+1. **Zdrojový kód `topaz_inject.c` a CI běh 41325798194**:
+   - Do `userland/gpu/topaz_inject.c` doplněn `#include <pthread.h>`, `#include <objc/message.h>` a `sb_unlock_worker`.
+   - Commit `560cd62` odeslán do `origin/main`.
+   - Úspěšný běh CI `gpu.yml` (run 41325798194, 2m 47s).
+   - Stažena nová `libtopaz-inject.dylib` (71 072 B).
+2. **Sestavení nového balíčku ADT a boot obrazu**:
+   - `scratch/blobs.bin` zabalen pomocí `tools/mkblobs.py` (15 364 144 B).
+   - `xnu/out/willow.adt` přegenerován (15 374 724 B).
+   - Sestaven `xnu/out/payload-gui31.bin` (32 821 920 B) s optimalizovaným cmdline (519 B).
+   - Sestaven `shim/out/shim-evox-boot-gui31.img` (33 120 992 B) pomocí `tools/pack_evox_boot.py`.
+   - Obraz připraven k okamžitému odeslání přes `fastboot boot shim/out/shim-evox-boot-gui31.img`.
