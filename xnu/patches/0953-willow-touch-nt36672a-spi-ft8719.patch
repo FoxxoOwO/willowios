@@ -47,7 +47,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
 +		return EBUSY;
 +	}
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
++	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS idle low */ /* CS active high */
 +	delay(2);
 +	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
 +	touch_wr(st.se, SE_TX_LEN, len);
@@ -76,13 +76,13 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		if ((irq & SE_DONE) && got >= len) {
 +			touch_wr(st.se, SE_IRQ_CLR, irq);
 +			delay(2);
-+			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
++			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS idle low */
 +			return 0;
 +		}
 +		delay(1);
 +	}
 +	touch_abort();
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
++	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS idle low */
 +	return ETIMEDOUT;
 +}
 +
@@ -217,7 +217,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_gpio(6, 1, 0, 3, false, false);                   /* SPI MISO */
 +		touch_gpio(7, 1, 0, 3, true, false);                    /* SPI MOSI */
 +		touch_gpio(8, 1, 0, 3, true, false);                    /* SPI SCLK */
-+		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);         /* SPI CS0 high */
++		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false); /* CS idle low */ /* CS active high */        /* SPI CS0 low (spi-cs-high idle) */
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
 +		touch_wait(10);
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);

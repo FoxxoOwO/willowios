@@ -998,3 +998,32 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 4. **Sestavené artefakty (`gui19`)**:
    - [`xnu/out/payload-gui19.bin`](xnu/out/payload-gui19.bin) (`31,064,000` B).
    - [`shim/out/shim-evox-boot-gui19.img`](shim/out/shim-evox-boot-gui19.img) (`31,363,072` B).
+
+## 2026-11-01: Hardware CS Polarity Fix (spi-cs-high) & Zero CPU Restart-Loop (gui20)
+
+### 1. Zjisteni z logu sweet-log-latest.txt (beh gui19, flush #50, 3199 radku)
+1. Tlacitka hlasitosti:
+   - V logu: SWEET HID: key 0x30 down (1 clients) (Power), key 0xe9 down (1 clients) (Vol+), key 0xea down (1 clients) (Vol-). Uzivatel potvrdil spravnou orientaci tlacitek.
+2. Pricina pretrvavajici pomalosti:
+   - V logu se 28krat opakoval pad a restart demonu spindump a nanotimekitcompaniond.
+   - V gui19 jim libtopaz-inject.dylib vracel exit(0). Protoze launchd ma pro tyto sluzby nastaven restart, exit(0) zpusobil restart-loop kazdych ~100 ms, coz pretizilo CPU.
+3. Pricina nefunkcniho dotyku (trim err=0 00:00:00:00:00:00):
+   - V device tree willow (/soc/spi@4a88000/touchpad) je specifikovano spi-cs-high.
+   - Hardwarovy Chip Select (GPIO 9) radice Novatek NT36672A je Active-High, nikoli Active-Low.
+   - Puvodni kod drzel CS v klidu na HIGH a pri prenosu ho stahoval na LOW. Cip byl tedy behem prenosu deaktivovan, coz zpusobovalo cteni samych nul.
+
+### 2. Provedene opravy v shim/out/shim-evox-boot-gui20.img
+1. Oprava polarity Chip Select (spi-cs-high) v xnu/out/kernel.development.sweet:
+   - 0x530bb0: 8c 79 1e 12 (and w12, w12, #0xfffffffd) -> CS v klidu LOW.
+   - 0x5329c0: 8c 01 1f 32 (orr w12, w12, #2) -> CS pri prenosu HIGH.
+   - 0x532c48: 8c 79 1e 12 (and w12, w12, #0xfffffffd) -> CS po prenosu LOW.
+   - 0x532c94: 8c 79 1e 12 (and w12, w12, #0xfffffffd) -> CS pri timeoutu LOW.
+   - Aktualizovan zdrojovy patch xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch.
+2. Neutralizace restart-loopu nanotimekitcompaniond a spindump:
+   - V userland/gpu/topaz_inject.c i scratch/patch_inject.py zmenen cil z exit(0) na FN_SLEEP_FOREVER (while(1) usleep(1000000)).
+   - Prepoc противопоставлены SHA256 CodeDirectory hashe v scratch/gpu/libtopaz-inject.dylib.
+   - Znovuzabalen scratch/blobs-full.bin (13,606,032 B) a vlozen do xnu/out/willow.adt (13,616,612 B).
+3. Sestavene artefakty (gui20):
+   - xnu/out/payload-gui20.bin (31,064,000 B).
+   - shim/out/shim-evox-boot-gui20.img (31,363,072 B).
+   - Obraz nabootovan na zarizeni pres fastboot boot.

@@ -379,10 +379,14 @@ topaz_inject(void)
 		exit(0);
 	}
 	if (name != NULL && strcmp(name, "nanotimekitcompaniond") == 0) {
-		exit(0);
+		log_console("topaz-inject: neutralized nanotimekitcompaniond (sleeping)\n");
+		while (1) { usleep(1000000); }
+		return;
 	}
 	if (name != NULL && strcmp(name, "spindump") == 0) {
-		exit(0);
+		log_console("topaz-inject: neutralized spindump (sleeping)\n");
+		while (1) { usleep(1000000); }
+		return;
 	}
 	if (name != NULL && strcmp(name, "mobileactivationd") == 0) {
 		mobileactivationd_fixes();
