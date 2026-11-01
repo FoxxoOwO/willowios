@@ -1114,3 +1114,31 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
    - [`xnu/out/payload-gui22.bin`](xnu/out/payload-gui22.bin) (`31,064,000` B).
    - [`shim/out/shim-evox-boot-gui22.img`](shim/out/shim-evox-boot-gui22.img) (`31,363,072` B).
    - Odeslano a nabootovano do zarizeni pres `fastboot boot`.
+
+
+## 2026-11-01: Hardware Reset Pulse, Novatek Bootloader Reset, Mass Daemon Neutralization (gui24)
+
+### 1. Zjištění z logu gui23 a rozboru pádu z fotografie:
+1. Pád z fotografie (gui22): Způsoben neplatným přístupem na MMIO 0x400000. V gui23 byla bázová adresa vrácena na 0x500000 a systém naběhl do GUI.
+2. Příčina nefunkčního dotyku:
+   - Registr w1 pro clock_interval_to_deadline byl v gui18 nechtěně přepsán, scale factor byl 0 / neplatný. Vlákno touch_thread při volání assert_wait_deadline usnulo navždy a zablokovalo se před prvním transferem.
+   - GPIO 87 nikdy nedostal 10ms LOW impuls.
+   - Chyběla sekvence bootloader resetu pro Novatek NT36672A (0x3f0fe -> 0x69, delay 35ms, 0x0).
+3. Příčina přetrvávající pomalosti a zahřívání:
+   - V logu stovky volání contextstored, coreduetd, duetexpertd, searchd, biomed, mobileassetd, remoted, které zatěžovaly CPU na 100 %.
+
+### 2. Provedené opravy v shim-evox-boot-gui24.img:
+1. Oprava inicializace dotyku v kernel.development.sweet (0x530bc8..0x530d08):
+   - GPIO 87 CFG nastaveno na výstup (0x2c3).
+   - Skutečný 10ms LOW impuls následovaný 50ms HIGH (přes spolehlivý HW delay).
+   - Kompletní bootloader reset: nvt_set_page(0x3f0fe), zápis 0x69 na 0x7e, delay 35ms, nvt_set_page(0x0).
+   - Skok přímo do start_polling s st.kind = TOUCH_NVT_SPI (3).
+2. Neutralizace 14 démonů na pozadí v libtopaz-inject.dylib (scratch/patch_inject.py):
+   - Přidána kompaktní tabulka démonů na 0x5500 pro okamžitý spánek (FN_SLEEP_FOREVER):
+     CollectionsPoster, homed, assetsd, bluetoothd, ReportCrash, nanotimekitcompaniond, spindump,
+     contextstored, coreduetd, duetexpertd, searchd, biomed, mobileassetd, remoted.
+   - Přepočteny SHA256 hashe stránek v CodeDirectory.
+   - Znovuzabalen scratch/blobs-full.bin a aktualizován willow.adt.
+3. Sestaveny artefakty (gui24):
+   - xnu/out/payload-gui24.bin (31,064,000 B).
+   - shim/out/shim-evox-boot-gui24.img (31,363,072 B).

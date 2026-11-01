@@ -221,15 +221,16 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_gpio(8, 1, 0, 3, true, false);                    /* SPI SCLK */
 +		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true); /* CS idle high */
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
-+		touch_wait(10);
++		delay(10000);
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);
-+		touch_wait(60);
-+		uint8_t trim[8] = { 0 };
-+		(void)touch_nvt_set_page(0x1f64eu);
-+		int ne = touch_nvt_spi_read(0x4eu, trim, 6);
-+		(void)touch_nvt_set_page(0x21c00u);
-+		printf("SWEET TOUCH: willow SPI Novatek trim err=%d %02x:%02x:%02x:%02x:%02x:%02x\n",
-+		    ne, trim[0], trim[1], trim[2], trim[3], trim[4], trim[5]);
++		delay(50000);
++		uint8_t cmd_page[3] = { 0xffu, 0x7eu, 0x01u };
++		(void)touch_spi_xfer(cmd_page, NULL, 3);
++		uint8_t cmd_rst[2] = { 0xfeu, 0x69u };
++		(void)touch_spi_xfer(cmd_rst, NULL, 2);
++		delay(35000);
++		uint8_t cmd_zero[3] = { 0xffu, 0x00u, 0x00u };
++		(void)touch_spi_xfer(cmd_zero, NULL, 3);
 +		st.kind = TOUCH_NVT_SPI;
 +		goto start_polling;
 +	}

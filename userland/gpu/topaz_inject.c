@@ -384,8 +384,15 @@ topaz_inject(void)
 		while (1) { usleep(1000000); }
 		return;
 	}
-	if (name != NULL && strcmp(name, "spindump") == 0) {
-		log_console("topaz-inject: neutralized spindump (sleeping)\n");
+	if (name != NULL && (strcmp(name, "spindump") == 0 ||
+	    strcmp(name, "contextstored") == 0 ||
+	    strcmp(name, "coreduetd") == 0 ||
+	    strcmp(name, "duetexpertd") == 0 ||
+	    strcmp(name, "searchd") == 0 ||
+	    strcmp(name, "biomed") == 0 ||
+	    strcmp(name, "mobileassetd") == 0 ||
+	    strcmp(name, "remoted") == 0)) {
+		log_console("topaz-inject: neutralized background daemon (sleeping)\n");
 		while (1) { usleep(1000000); }
 		return;
 	}
