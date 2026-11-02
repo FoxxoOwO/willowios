@@ -1589,3 +1589,39 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 2. Přestavět payload přes `tools/mkpayload.py <kernel> xnu/out/willow.adt …` s **přesným 519znakovým cmdline** (nikdy ten 511znakový) a zabalit `tools/pack_evox_boot.py`.
 3. Nabootovat a log vytáhnout hned přes Vol+ a Power do recovery (`python3 scratch/pull_gui34_log.py gui38`); kontrolní bod je řádka `trim`/`SWEET HID: touch`.
 4. `scratch/patch_kernel_touch.py` už **nepoužívat** — přepisuje zkompilovaný kód na slepých offsetech a tváří se jako build.
+
+## 2026-11-02 (2): CI tiše zahazoval 4 willow patche — včetně 0953 (dotyk)
+
+### 1. Jak se to poznalo
+- Kernel z CI (`gh run view 41496755444 --log`) obsahuje řádky
+  `[warning] Skipping patch …/0953-willow-touch-nt36672a-spi-ft8719.patch (already upstream, previously applied, or malformed): error: corrupt patch at line 279`
+  a stejné varování pro **0955** (USB), **0958** (sdhci-diag) a **0959** (adreno).
+  `grep -c "Skipping patch"` = 8: ty čtyři naše + 4 blacktopovy (`TrustCache.patch`,
+  `iobuffermemd_monterey`, `skywalk_sonoma`, `syntax_checker_sonoma`), které se na macOS 13.5
+  přeskakují legitimitně.
+- **Důsledek:** build se zeleným fajfkou vůbec neobsahoval touch driver, USB DWC3/QUSB2/SMMU,
+  sdhci diagnostiku ani úpravy Adrena. Veškerý „běžící“ touch kód byl jen ručně injektovaný blob
+  z `scratch/patch_kernel_touch.py`, který se do `xnu/out/kernel.development.sweet` zapisuje
+  napevno podle offsetů — odtud rozpor mezi zdrojem a chováním.
+
+### 2. Příčiny (dvě různé)
+- **0953:** soubor nekončil znakem nového řádku (`ends with newline: False`, 10 105 B) →
+  `patch` hlásí `corrupt patch at line 279`, což je poslední řádek souboru. Opraveno přidáním `\n`.
+- **0955, 0958, 0959:** hlavičky hunků nesouhlasily s obsahem (`-39,25 +39,28` vs. tělo `-28 +31`
+  atd.). Opraveno přepočtem počtů **jen na staré straně**; čísla nové strany se záměrně nemění
+  (git aplikuje podle staré strany a přepočet nové strany potřebuje delta per soubor — 0955 má
+  hunky pro dva soubory, což je přesně cesta, jak „opravit“ patch znovu na corrupt).
+
+### 3. Nástroj `tools/patchlint.py`
+- Projde všech 214 patchů, najde (a) hlavičku, jejíž počty nesedí s tělem, (b) chybějící koncový
+  nový řádek. `--fix` hlavičky přepíše.
+- Ověřeno proti `git apply --stat` (git je autorita pro „co se dá parsovat“): před opravou
+  hlásil git 3 rozbité soubory + 0953 měl chybějící newline; po opravě projde všech 214.
+- Pozor na dvě úskalí při psaní takového parseru: `--- a/…` (hlavička dalšího souboru) začíná na
+  `-` a e-mailový podpis `-- ` začíná také na `-`; obojí musí hunk ukončit, jinak parser nafoukne
+  počty a označí i zdravé patche (původně falešně 110–214 „poškozených“).
+
+### 4. Stav
+- Oprava je na větvi `fix/patch-structure`, CI běh po pushnutí musí mít v logu
+  `grep -c "Skipping patch"` = **4** (jen blacktopovy), jinak se některý patch stále ztrácí.
+- Kernel z běhu 41496755444 (`18 035 968 B`) je **nepoužitelný** — nemá touch driver.

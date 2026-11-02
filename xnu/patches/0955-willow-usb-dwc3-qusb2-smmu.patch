@@ -21,7 +21,7 @@ diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
-@@ -39,25 +39,28 @@
+@@ -39,28 +39,31 @@
  static void sweet_usb_gadget_start(vm_offset_t dwc);
  extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
  
@@ -65,7 +65,7 @@ diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
  
  static uint32_t
  usb_rd(vm_offset_t base, uint32_t off)
-@@ -113,17 +116,13 @@ sweet_usb_probe(void)
+@@ -113,22 +116,16 @@ sweet_usb_probe(void)
  	printf("SWEET USB: DWC3 GEVNTADR 0x%08x%08x GEVNTSIZ 0x%08x GEVNTCOUNT 0x%08x GHWPARAMS0 0x%08x\n",
  	    usb_rd(dwc, 0xc404), usb_rd(dwc, 0xc400), usb_rd(dwc, 0xc408), usb_rd(dwc, 0xc40c),
  	    usb_rd(dwc, 0xc140));
@@ -98,7 +98,7 @@ diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
  }
  
  /*
-@@ -161,7 +160,7 @@ sweet_usb_probe(void)
+@@ -161,8 +160,8 @@ sweet_usb_probe(void)
   * controller only connects (pull-up on D+) while it sees a valid VBUS
   * session; Linux dwc3-qcom forces that in software when the charger
   * reports a cable (dwc3_qcom_vbus_override_enable).

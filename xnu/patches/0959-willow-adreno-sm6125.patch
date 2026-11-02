@@ -18,7 +18,7 @@ diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
 index e4fc8a2..5751000 100644
 --- a/iokit/Kernel/arm/TopazAdreno.cpp
 +++ b/iokit/Kernel/arm/TopazAdreno.cpp
-@@ -108,7 +108,7 @@
+@@ -108,5 +108,5 @@
  #define GCC_SIZE            0x80000
  
 -#define ZAP_REGION          0x55B15000ull
@@ -34,7 +34,7 @@ index e4fc8a2..5751000 100644
  		st = scm(SCM_FN(SCM_SVC_PIL, PIL_INIT_IMAGE), 2 | (SCM_ARG_RW << 6), GPU_PAS_ID, meta.pa, 0, &res);
  		if (st != 0 || res != 0) {
  			IOLog("TopazGPU: zap init_image: %llx/%llx\n", st, res);
-@@ -1611,8 +1611,8 @@ power_up(void)
+@@ -1611,7 +1611,7 @@ power_up(void)
  	rmw(gcc, 0x79004, 0, 1u << 15);                 /* GPLL0 to the GPU CC */
  	branch_on(gcc, 0x71154, "gcc_bimc_gpu_axi");
 -	branch_on(gcc, 0x3600c, "gcc_gpu_memnoc_gfx");
