@@ -1559,3 +1559,33 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 
 ### 4. Stav
 - Telefon nabootován gui36 (fastboot OKAY). Log z tohoto běhu zatím **nevytažen** — je potřeba přejít do recovery (Vol+ a Power) a stáhnout ring z `userdata` (`bs=4096 skip=12829690 count=1025`).
+
+## 2026-11-02: NALEZENA PŘÍČINA nefunkčního dotyku — špatný pinmux (func 1 místo qup02 = 2)
+
+### 1. Co je pozorování a co je závěr
+- **Pozorování:** gui34 skutečně nabootuje do iOS (potvrzeno uživatelem: "iOS lock screen"). Log z tohoto běhu (`sweet-log-gui34c.bin`, boot-args 519 znaků = `payload-gui34.bin`) obsahuje `SWEET TOUCH: mapping GCC/TLMM/SE2`, `se2 fw=0x101 proto=1 status=0 tx=0x20102864 rx=0x20104800 ios=0`, `TLMM reset=0 irq=0 avdd=0`, `selected Novatek NT36672A SPI, 1080x2340, poll=10ms irq-hint=0` — a **pak už nic**: žádná `trim` řádka, žádná `SWEET HID: touch` událost. Starší běh (gui32) tiskl `trim err=0 00:00:00:00:00:00`, tedy transakce "skončila úspěšně", ale nepřenesla ani bajt.
+- **Závěr:** chyba není v bootu, resetu ani v SE — chyba je v tom, že pady SPI nejsou přepnuté na QUP SE2, takže SE clockuje do prázdna a RX FIFO vrací nuly.
+
+### 2. Vlastní příčina: mux funkce SPI padů
+- DT `dtb/willow/dtb`, uzel `/soc/pinctrl@400000/qupv3_se2_spi_pins/qupv3_se2_spi_active/mux`: `pins = "gpio6","gpio7","gpio8","gpio9"`, `function = "qup02"`. (Ověřeno i bajtově: v DTB jsou čtyři skupiny `gpio6\0gpio7\0gpio8\0gpio9\0`, kolem offsetu `0x1b71c`.)
+- Mainline `drivers/pinctrl/qcom/pinctrl-sm6125.c` (SM6125 = trinket): `[6] = PINGROUP(6, WEST, qup02, …)`, totéž pro 7, 8, 9. Makro `PINGROUP(id,_tile,f1,…)` plní `funcs[] = { msm_mux_gpio (0), msm_mux_##f1 (1), msm_mux_##f2 (2), … }`, takže **`qup02` je index 2** a index 1 je `WEST`.
+- Náš driver ale psal `touch_gpio(6, 1, 0, 3, false, false)` (a stejně pro 7/8), tj. mux=1. `touch_gpio()` skládá `cfg |= (mux << 2)`, takže se do TLMM zapsala funkce 1 → **MISO/MOSI/SCLK zůstaly odpojené od SE2**. Data se nikdy nehodí na sběrnici, čip nic nevidí, SE dokončí "transakci" s nulovou délkou dat → all-zero čtení a žádné dotykové reporty.
+- Oprava v `0953`: mux **2** (`qup02`) pro GPIO 6/7/8, s komentářem vysvětlujícím indexaci.
+
+### 3. Druhá chyba: CS se nikdy neaktivoval
+- Běžící binárka (`payload-gui34.bin`, funkce `touch_spi_xfer` na VA `0xfffffe0007536920`) nastaví `GPIO9 CFG=0x2c3`, `IO9 |= 2` (`0xfffffe00075369c0: orr w12, w12, #2` → HIGH) a drží CS **HIGH celou transakci**, na konci ho shodí (`0xfffffe0007536c48: and w12, w12, #0xfffffffd`).
+- Zdrojový `0953` naopak psal CS LOW na začátku i na konci, tj. CS se **nikdy nezměnil** – žádná hrana, žádné orámování transakce.
+- DT `spi-cs-high` nemá → CS je aktivní v LOW. Správně: idle HIGH, na začátku transakce LOW, na konci HIGH. Takto je `0953` nyní opravený (včetně timeout cesty).
+- To také vysvětluje obě dřívější měření: `00:00:…` (CS trvale HIGH = čip odpojený) i `ff:ff:…` (CS trvale LOW bez hran; MISO plave).
+
+### 4. Třetí, procesní chyba: opravený driver se nikdy nezkompiloval
+- Na telefonu neběží build ze zdrojů, ale **ručně injektovaný blob**: `scratch/patch_kernel_touch.py` přepisuje 80 instrukcí na VA `0xfffffe0007534bc8` (file offset `0x530bc8`) + 1 instrukci na `0x5329fc`. Disassemblovaný `payload-gui34.bin` v tomto rozsahu obsahuje starší ruční sekvenci (GPIO87 reset, `ff ff ff` → `80 5a` → page `ff 07 e1` → `fe 69` → 35 ms → page `ff 07 e6` → `90 00` → 5 ms → `ff 00 00`), kdežto `payload-gui36/37.bin` obsahují moji dnešní kratší variantu.
+- `payload-gui36/37.bin` jsou navíc **bajtově shodné s lokálním `xnu/out/kernel.development.sweet`** (rozdíl 0 B v celém `__TEXT_EXEC`), který dnes 13:53 přepsal `patch_kernel_touch.py`; od gui34 se liší jen 216 B ve `0xfffffe0007534425..0x7534cff`.
+- Commit `185820f` (oprava hunků + nový reset/SE config) **není pushnutý** (`main...origin/main [ahead 1]`), takže pro něj neexistuje žádný CI běh (`gh run list --commit 185820f` je prázdné). Poslední úspěšný build je `41338410152` pro `443426c` (2026-11-01T18:47). Dřívější pushe v 17:10 a 17:42 sežral `concurrency: cancel-in-progress`.
+- Důsledek: všechy testované obrazy gui32–gui37 obsahují **starý** kód, jen s lokálně přebitou binárkou. Opravený zdroják musí nejdřív projít CI.
+
+### 5. Další kroky
+1. Pushnout `185820f` (nebo follow-up commit s opravou muxu/CS) → CI `xnu.yml` → stáhnout `kernel.development.sweet`.
+2. Přestavět payload přes `tools/mkpayload.py <kernel> xnu/out/willow.adt …` s **přesným 519znakovým cmdline** (nikdy ten 511znakový) a zabalit `tools/pack_evox_boot.py`.
+3. Nabootovat a log vytáhnout hned přes Vol+ a Power do recovery (`python3 scratch/pull_gui34_log.py gui38`); kontrolní bod je řádka `trim`/`SWEET HID: touch`.
+4. `scratch/patch_kernel_touch.py` už **nepoužívat** — přepisuje zkompilovaný kód na slepých offsetech a tváří se jako build.
