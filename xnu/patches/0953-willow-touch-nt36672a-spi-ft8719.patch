@@ -38,8 +38,8 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  
 +/*
 + * willow: full-duplex GENI SPI transfer on QUP0 SE2 (spi@4a88000) with manual
-+ * active-HIGH CS on GPIO 9 (WEST tile) per DT property spi-cs-high.
-+ * Idle: CS=LOW (deasserted), Transfer: CS=HIGH (asserted), Done: CS=LOW.
++ * CS on GPIO 9. The DT has no spi-cs-high property, so CS is active LOW:
++ * Idle: CS=HIGH (deasserted), Transfer: CS=LOW (asserted), Done: CS=HIGH.
 + */
 +static int
 +touch_spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned len)
@@ -50,7 +50,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
 +		return EBUSY;
 +	}
-+	/* CS idle LOW (deasserted for spi-cs-high) */
++	/* CS asserted LOW for the whole transaction (active-low chip select). */
 +	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
 +	delay(2);
 +	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
@@ -80,15 +80,15 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		if ((irq & SE_DONE) && got >= len) {
 +			touch_wr(st.se, SE_IRQ_CLR, irq);
 +			delay(2);
-+			/* CS idle LOW (deasserted for spi-cs-high) */
-+			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
++			/* CS deasserted HIGH after the transaction. */
++			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
 +			return 0;
 +		}
 +		delay(1);
 +	}
 +	touch_abort();
-+	/* CS idle LOW on timeout */
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
++	/* CS deasserted HIGH on timeout as well. */
++	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
 +	return ETIMEDOUT;
 +}
 +
@@ -211,20 +211,25 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	/* Linux 8-bit I2C packing: MSB on the wire, LSB byte first in FIFO. */
  	touch_wr(st.se, 0x254, 0);
  	touch_wr(st.se, 0x260, SE_PACK0);
-@@ -650,6 +806,33 @@
+@@ -650,6 +806,38 @@
  	    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_RESET)),
  	    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)),
  	    touch_rd(st.east, TOUCH_GPIO_IO(TOUCH_PIN_AVDD)));
 +	if (st.spi_mode) {
-+		/* willow: Novatek NT36672A SPI on QUP0 SE2 (GPIO 6/7/8 mux=1, GPIO 9 manual CS, reset 87, IRQ 88) */
++		/*
++		 * willow: Novatek NT36672A SPI on QUP0 SE2. DT qupv3_se2_spi_active muxes
++		 * gpio6/7/8/9 to function "qup02", which is index 2 in the SM6125 pin
++		 * function table (funcs[0]=gpio, [1]=WEST, [2]=qup02) -- mux=1 would leave
++		 * SCLK/MOSI/MISO disconnected from the SE. CS stays a plain GPIO (mux 0).
++		 */
 +		st.irq_pin = WILLOW_PIN_IRQ;
 +		st.irq_hint = 0;
 +		touch_gpio(WILLOW_PIN_IRQ, 0, 3, 3, false, false);       /* IRQ input */
-+		touch_gpio(6, 1, 0, 3, false, false);                    /* SPI MISO (input) */
-+		touch_gpio(7, 1, 0, 3, true, false);                     /* SPI MOSI (output, OE=1) */
-+		touch_gpio(8, 1, 0, 3, true, false);                     /* SPI SCLK (output, OE=1) */
-+		/* CS idle LOW (deasserted for spi-cs-high) */
-+		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
++		touch_gpio(6, 2, 0, 3, false, false);                    /* SPI MISO, func qup02 */
++		touch_gpio(7, 2, 0, 3, true, false);                     /* SPI MOSI, func qup02 */
++		touch_gpio(8, 2, 0, 3, true, false);                     /* SPI SCLK, func qup02 */
++		/* CS idle HIGH (deasserted, the chip select is active low). */
++		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
 +		/* Hardware reset: GPIO 87 LOW 10ms -> HIGH 50ms */
 +		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
 +		delay(10000);
@@ -245,7 +250,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	/* TopazTouch touch.c: IRQ input, AVDD on, I2C pins, then the reset pulse. */
  	touch_gpio(TOUCH_PIN_IRQ, 0, 3, 3, false, false);       /* CTL 0xc3 */
  	touch_gpio(TOUCH_PIN_AVDD, 0, 3, 3, true, true);        /* CTL 0x2c3, high */
-@@ -694,9 +877,11 @@
+@@ -694,9 +882,11 @@
  		goto out;
  	}
  	st.kind = goodix ? TOUCH_GOODIX : TOUCH_FTS;
@@ -259,7 +264,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	unsigned errors = 0, ticks = 0, polls = 0;
  	while (!st.dead) {
  		if (st.diag == 2 && ++polls == 3000) {  /* ~30 s at 10 ms */
-@@ -709,9 +894,10 @@
+@@ -709,9 +899,10 @@
  		}
  		/* Optional IRQ hint still reads every 100ms, and always while down. */
  		if (!st.irq_hint || st.active ||
