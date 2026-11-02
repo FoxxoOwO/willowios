@@ -1625,3 +1625,44 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 - Oprava je na větvi `fix/patch-structure`, CI běh po pushnutí musí mít v logu
   `grep -c "Skipping patch"` = **4** (jen blacktopovy), jinak se některý patch stále ztrácí.
 - Kernel z běhu 41496755444 (`18 035 968 B`) je **nepoužitelný** — nemá touch driver.
+
+## 2026-11-02 (3): kernel z CI s dotykovým driverem (gui38) — připraven k nabootování
+
+### 1. CI
+- `main` = `976f480` (mux/CS) + `a80e0b5` (oprava patchů), přes PR #1 a #2 (přímý push do `main` je
+  blokovaný lokálním guardem, proto PR + `gh pr merge --rebase --delete-branch`; `origin/main` je pak
+  totožný s rebased commity).
+- Běh **41496755444** (před opravou patchů): `Skipping patch` ×8 — 0953, 0955, 0958, 0959 + 4 blacktopovy.
+  Kernel 18 035 968 B, **bez** touch driveru, **nepoužívat**.
+- Běh **41499117337** (po opravě): `Skipping patch` ×5, z našich už jen **0959** (adreno), a to už ne
+  jako *corrupt patch*, ale `error: patch failed: iokit/Kernel/arm/TopazAdreno.cpp:108` — kontext nesedí,
+  takže se ten patch v tomto stromu nikdy neaplikoval a jeho změny chybí. `sweet_touch.c` se v logu
+  kompiluje (21 zmínek). Kernel 18 052 664 B, `sha256 4ecc33a3e53895a6…`.
+
+### 2. Ověření, že oprava je skutečně v binárce (disassemblace `kernel.development.sweet`)
+- Init (`0xfffffe0007534b9c`…): `mov w10, #0xc3` (IRQ), `mov w11, #0xc8`, `mov w13, #0x2c8` → cfg pro
+  GPIO 6/7/8 mají **mux 2 (qup02)**: MISO vstup, MOSI/SCLK výstup. Zápisy míří na
+  `0x406000/0x407000/0x408000` (+4 pro IO), tj. TLMM base `0x400000` ✓.
+- CS (GPIO 9, `0x409000/0x409004`): cfg `0x2c3` a `orr w12, w12, #2` → **idle HIGH**.
+- Reset GPIO 87: IO low → `delay(0x2710)` 10 ms → IO high → `delay(0xc350)` 50 ms.
+- Bootloader reset: `ff 07 e1` (page `0x3f0fe`), `mov w8, #0x69fe` (`fe 69`), `mov w0, #0xea60`
+  (**60 ms**), `ff 00 00` (page 0) — tedy totéž, co dřív existovalo jen v ručně injektovaném blobu.
+- `touch_spi_xfer` (`0xfffffe0007536510`): na začátku `and w12, w12, #0xfffffffd` na IO9 → **CS LOW**,
+  `str w9, [x8, #0x600]` s `mov w9, #0x18000000` (SPI TX+RX, 3<<27), TX/RX len `0x26c`/`0x270`; spin
+  nejvýš `0x1f4` = 500 iterací → timeout; na úspěchu i na timeoutu `orr w12, w12, #2` → **CS HIGH**.
+
+### 3. Artefakty
+- `xnu/out/kernel.development.sweet` = kernel z běhu 41499117337 (18 052 664 B); předchozí uložen jako
+  `scratch/kernel-before-ci-41499117337.sweet`.
+- `xnu/out/willow.adt` přegenerován (`tools/mkadt.py xnu/out/willow.adt --blobs scratch/blobs.bin`,
+  15 374 724 B).
+- `xnu/out/payload-gui38.bin` 32 822 208 B (cmdline 519 znaků, 1 výskyt v payloadu).
+- `shim/out/shim-evox-boot-gui38.img` 33 124 352 B (kp=294 498, ramdisk=32 822 208).
+- **Cmdline se už nekopíruje ručně:** `scratch/cmdline-willow.txt` (519 B, bajtově z `payload-gui34.bin`);
+  do `mkpayload.py` se předává přes Python, aby se neztratil soukromý znak v `unentitled_ios_sim_laun`.
+
+### 4. Další krok
+- `fastboot boot shim/out/shim-evox-boot-gui38.img`; po testu **hned** Vol+ a Power do recovery a
+  `python3 scratch/pull_gui34_log.py gui38`. Sledovat `SWEET TOUCH: selected Novatek …` a první
+  `trim`/`SWEET HID: touch` řádky. Když MISO pořád vrací samé nuly, je na řadě polarita CS
+  (`touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, …)`) — ale už jako změna zdroje, ne injektovaného blobu.
