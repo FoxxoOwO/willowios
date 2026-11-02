@@ -21,3 +21,15 @@ scratch/
 EvolutionX*.zip
 firmware/
 graphify-out/
+
+# device dumps + pulled logs (AGENTS.md: keep out of git)
+sweet-log*.bin
+sweet-log*.txt
+sweet-console-*.txt
+sweet-dmesg-*.txt
+sweet-pmsg-*.txt
+# local SDK tools
+platform-tools/
+# local build outputs
+out/
+sources.txt
