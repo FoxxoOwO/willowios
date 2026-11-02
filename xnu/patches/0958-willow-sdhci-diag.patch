@@ -116,7 +116,7 @@ Subject: [PATCH 958/958] willow: sdhci exit HS400 to High-Speed SDR via CMD6, 8-
  }
  
  static int
-@@ -308,35 +404,47 @@
+@@ -308,35 +404,46 @@
  	uint32_t *p = (uint32_t *)buf;
  
  	while (cnt > 0) {
