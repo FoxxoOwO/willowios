@@ -1666,3 +1666,32 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
   `python3 scratch/pull_gui34_log.py gui38`. Sledovat `SWEET TOUCH: selected Novatek …` a první
   `trim`/`SWEET HID: touch` řádky. Když MISO pořád vrací samé nuly, je na řadě polarita CS
   (`touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, …)`) — ale už jako změna zdroje, ne injektovaného blobu.
+
+## 2026-11-02 (4): gui38 nenaběhl — ring nezapsán, konzole se zasekla (bez panic)
+
+### Pozorování
+- `fastboot boot shim/out/shim-evox-boot-gui38.img` → `Sending 32348 KB OKAY / Booting OKAY`; po 90 s se
+  v `adb`/`fastboot` neobjevilo nic (stejné jako u gui34, který přitom naběhl do iOS).
+- Uživatel: na displeji **textová konzole, žádný panic, ale zaseknutá**.
+- Log vytažený v recovery (`python3 scratch/pull_gui34_log.py gui38`): `total 349051 bytes, flush #38`,
+  4750 řádků, boot-args 519 znaků = `payload-gui34.bin`, md5 `23521f580eec7a9782b2f9d910303356`
+  — **bajtově shodný s `sweet-log-gui34c.bin`**. gui38 tedy nezapsal do ringu ani bajt a jediné touch
+  řádky v logu jsou z gui34.
+- `pstore` v recovery obsahuje jen starou Android session končící `reboot: Restarting system with
+  command 'bootloader'` — XNU do ramoops nepíše, odsud informace o posledním bootu nejsou.
+
+### Co z toho plyne
+- `sweet_log_start()` (patch 0047) se volá z cesty mountu UFS a zapisuje průběžně z kernel threadu.
+  Prázdný ring = kernel se k mountu nedostal, nebo se zasekl dřív, než log thread poprvé proběhl.
+  Konzole ale text vypisuje už před mountem — proto je na displeji vidět.
+
+### Co je v gui38 nového proti gui34
+- `gui34` = kernel, kde se 0953/0955/0958 **necompilely** (patch loop je tiše přeskakoval) a dotyk jel
+  z ručně injektovaného blobu. `gui38` = první kernel, kde se 0953 (mux/CS), 0955 (USB DWC3/QUSB2/SMMU)
+  i 0958 (**sdhci: přechod z HS400 na SDR, 8bit sběrnice, 1.8 V, `sdhci_set_config()` po každém resetu**)
+  opravdu zkompilovaly. 0958 mění právě cestu, po které se čte root z `userdata` → nejpravděpodobnější
+  viník zaseknutí před mountem.
+
+### Poznámka k nástrojům
+- `scratch/pull_gui34_log.py` funguje, ale **md5 výstupu se musí porovnat s předchozím během**, jinak se
+  analyzuje starý log (stalo se to u gui36 i u gui38).
