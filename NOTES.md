@@ -1536,3 +1536,26 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 4. **Odeslání a spuštění**:
    - Zařízení přepnuto z recovery do bootloaderu (`adb reboot bootloader`).
    - Obraz nabootován přes `platform-tools/fastboot boot shim/out/shim-evox-boot-gui35.img` (OKAY 1.062s).
+
+## 2026-11-02: gui36 selhal kvůli chybnému buildu (špatný cmdline + stub ADT) & oprava poškozených hunk hlaviček v 0953
+
+### 1. Proč telefon "nebootoval" (gui36)
+1. **Log z telefonu po gui36 nepocházel z gui36.** `sweet-log-gui36.txt` (stažený z `userdata` v recovery, ring 4 MiB, flush #61, 110 310 B) obsahuje boot-args starého obrazu (`sweetiolog=- … sweettou … irq-hint=1`), který se nabootoval ze **flashnuté `boot` partition** poté, co `fastboot boot` gui36 selhal/přebootoval.
+2. **Dvě konkrétní chyby v mém buildu gui36** (obojí mé pochybení, ne HW):
+   - `tools/mkpayload.py` byl volán s cmdline `console=serial,115200 root=PARTUUID=00000000-0000-0000-0000-000000000000 rw` — chybí `rd=ufsroot0`, `ignition_level=1`, `unentitled_ios_sim_laun`, `debug=0xc` atd. Bez `rd=ufsroot0` XNU čeká na root device, který nikdy nepřijde → zamrzne.
+   - ADT byl vzat z `dtb/willow/willow.adt` (**7 080 B stub**), nikoli z `xnu/out/willow.adt` (**15 374 724 B** s GPU/inject bloby). Payload měl 17 454 464 B místo 32 822 112 B → chybí `topaz_inject=_...` dyliby i GPU firmware.
+3. **Oprava**: payload přestavěn s ADT `xnu/out/willow.adt` a přesným 511znakovým cmdline z gui35 (`xnu/out/payload-gui36.bin`, 32 822 112 B), boot image `shim/out/shim-evox-boot-gui36.img` (33 124 352 B, kernel 294 498 B, DTB 286 092 B, ARM64 magic `ARMd` OK) a nabootován přes `fastboot boot` (OKAY, 1.095 s).
+
+### 2. Oprava struktury patche 0953 (vážné)
+- Při ručních úpravách `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch` jsem přidával řádky bez přepočtu hlaviček `@@`. Kontrola (`scratch/valpatch.py`) ukázala, že hunkům 1, 3 a 6 neseděly počty nových řádků (18/16, 143/139, 33/26) — `git apply` v CI by celý soubor odmítl jako *corrupt patch* a touch driver by se tiše nezkompiloval.
+- Hlavičky přepočítány nástrojem `scratch/fixpatch.py` (zachová starty staré strany, nová strana = start + kumulativní delta). Nyní všech 8 hunků validních, `scratch/valpatch.py` hlásí `VALID`.
+- Pozor: hunk 1 byl rozbitý **už předtím** (hlavička `+33,16` při 18 nových řádcích), takže 0953 mohl být v CI dlouho tiše přeskakován.
+
+### 3. Co DT skutečně říká o dotyku (ověřeno offline)
+- `dtb/willow/dtb`, uzel `/soc/spi@4a88000`: `compatible="qcom,spi-geni"`, `reg=<0x4a88000 0x4000>`, `spi-max-frequency=<0x2faf080>` (50 MHz), `interrupts=<0 0x149 0>`, `status="disabled"` (zapíná až overlay).
+- `dtb/willow/dtbo-willow.dtb`, uzel `/fragment@41/__overlay__/touchpad`: `status="ok"`, `compatible="focaltech,fts"`, `reg=<0>`, `spi-max-frequency=<0x7a1200>` (8 MHz), `interrupts=<0xd 2>`, `focaltech,reset-gpio=<… 0x57 1>`, `focaltech,irq-gpio=<… 0x58 2>`, `novatek,reset-gpio=<… 0x57 0>`, `novatek,irq-gpio=<… 0x58 0x2001>`, `novatek,swrst-n8-addr=<0x3f0fe>`, `novatek,spi-rd-fast-addr=<0x3f310>`.
+- **Důležité:** v tomto DT **není `spi-cs-high`**. Tvrzení v sekci gui32 o jeho fyzické přítomnosti tedy není tímto souborem podložené (platí jen pro ROM, ze které se četl živý DT). Polarita CS zůstává nepotvrzená hypotéza.
+- Naměřené chování: aktivní-LOW varianta (idle HIGH, transfer LOW) vracela `trim = ff:ff:ff:ff:ff:ff`; aktivní-HIGH varianta (idle LOW, transfer HIGH, aktuální binárka) vrací `trim = 00:00:00:00:00:00`. Ani jedno není platná odpověď čipu — MISO tedy pravděpodobně nečte data, ne že by špatně seděla polarita CS.
+
+### 4. Stav
+- Telefon nabootován gui36 (fastboot OKAY). Log z tohoto běhu zatím **nevytažen** — je potřeba přejít do recovery (Vol+ a Power) a stáhnout ring z `userdata` (`bs=4096 skip=12829690 count=1025`).
