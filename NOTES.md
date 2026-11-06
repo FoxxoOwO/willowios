@@ -1695,3 +1695,34 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 ### Poznámka k nástrojům
 - `scratch/pull_gui34_log.py` funguje, ale **md5 výstupu se musí porovnat s předchozím během**, jinak se
   analyzuje starý log (stalo se to u gui36 i u gui38).
+
+## 2026-11-06 / 2026-11-07: Analýza "kernel panic" v gui35 & příprava gui36
+
+### 1. Zjištění z logu gui35 (sweet-log-gui35.txt, 4750 řádků, 348 787 B)
+1. **Zdánlivý "Kernel Panic" byl ve skutečnosti IOKit warning s backtracem**:
+   - V logu ani na hardware nedošlo ke kernel panicu (kernel běžel dál a vykresloval 60 FPS).
+   - Na obrazovce se objevil hexadecimální backtrace vyvolaný `OSReportWithBacktrace`:
+     `warning: creating writable mapping from IOMemoryDescriptor(kIODirectionOut) - use kIOMapReadOnly or change direction`
+     `Backtrace 0xfffffe0007a79938 0xfffffe0007b0b738 0xfffffe0007b1a544 ... can't perform kext scan: no kext summary`
+   - Vizuálně se na framebufferu text konzole smíchal s GUI a vypadal jako panic.
+2. **Skutečná chyba: Crashloop SpringBoardu (`NSInternalInconsistencyException`)**:
+   - SpringBoard padal opakovaně 5× s chybou:
+     `*** Assertion failure in +[SBLockScreenManager _sharedInstanceCreateIfNeeded:], SBLockScreenManager.m:330`
+     `*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'Unexpectedly created SBLockScreenManager before UIApplication instance was created.'`
+   - *Příčina*: `sb_unlock_worker` v `topaz_inject.c` volal aktivně `[UIApplication sharedApplication]`. V subclassovaném SpringBoardu tato metoda vyvolává inicializaci `SBLockScreenManager`, která před dokončením `UIApplicationMain` selže na aserci `[UIApplication sharedApplication] != nil`.
+3. **Důkaz funkčnosti auto-unlocku**:
+   - V řádku 2809 logu, jakmile SpringBoard přežil do `UIApplicationMain`, se objevil log:
+     `topaz-inject: SpringBoard unlocked via unlockUIFromSource:17`
+     Odemčení UI tedy funguje, jen bylo spouštěno příliš brzy a agresivně.
+
+### 2. Oprava v `userland/gpu/topaz_inject.c`
+- Aktivní volání `[UIApplication sharedApplication]` nahrazeno pasivní kontrolou exportovaného UIKitCore ukazatele `UIApp` (`id **pUIApp = (id **)dlsym(RTLD_DEFAULT, "UIApp")`).
+- Přidán úvodní delay 12 s, aby SpringBoard v klidu naběhl. Teprve když `*pUIApp != NULL`, počká 3 s a zavolá `unlockUIFromSource:17`.
+- Commit `833b30c` pushnut na `origin/main`.
+- CI běh `gpu.yml` (run `42308540340`) úspěšně dokončen (2m 47s).
+
+### 3. Sestavení gui36
+- Stažen nový `libtopaz-inject.dylib` z release `gpu-latest`.
+- Sestaven `scratch/blobs.bin` a `xnu/out/willow.adt` (15 374 724 B).
+- Kernel převzat z osvědčeného `payload-gui35.bin` (obsahuje TLMM base `0x00400000`, 60 FPS, ověřený mount).
+- Sestaven `xnu/out/payload-gui36.bin` (32 822 112 B) a boot image `shim/out/shim-evox-boot-gui36.img` (33 124 352 B).
