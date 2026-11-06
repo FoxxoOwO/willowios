@@ -320,23 +320,21 @@ static void *
 sb_unlock_worker(void *arg)
 {
 	(void)arg;
-	/* Wait until UIApplication instance is created and running to avoid
-	 * NSInternalInconsistencyException: 'Unexpectedly created SBLockScreenManager
-	 * before UIApplication instance was created.' */
-	Class uia = NULL;
-	for (int wait = 0; wait < 60; wait++) {
-		sleep(1);
-		if (!uia) {
-			uia = objc_getClass("UIApplication");
-			if (!uia) continue;
-		}
-		id app = ((id (*)(id, SEL))objc_msgSend)(uia, sel_registerName("sharedApplication"));
-		if (app != nil) {
-			log_console("topaz-inject: UIApplication instance ready\n");
+	/* Wait 12 seconds for SpringBoard to complete UIApplicationMain and present CoverSheet.
+	 * Crucial: Do NOT call [UIApplication sharedApplication] here! In SpringBoard, calling
+	 * sharedApplication before UIApplicationMain triggers an assertion failure in
+	 * +[SBLockScreenManager _sharedInstanceCreateIfNeeded:]. Instead, check the global
+	 * UIApp pointer exported by UIKitCore, which is a pure pointer read without side-effects. */
+	sleep(12);
+	id **pUIApp = (id **)dlsym(RTLD_DEFAULT, "UIApp");
+	for (int wait = 0; wait < 30; wait++) {
+		if (pUIApp && *pUIApp != NULL) {
+			log_console("topaz-inject: UIApp instance is live\n");
 			break;
 		}
+		sleep(1);
 	}
-	/* Wait for SpringBoard UI to settle (present #1/#2, lock screen visible) */
+	/* Wait 3 seconds for CoverSheet / Lock Screen UI to present */
 	sleep(3);
 	for (int retry = 0; retry < 10; retry++) {
 		Class lsm = objc_getClass("SBLockScreenManager");
