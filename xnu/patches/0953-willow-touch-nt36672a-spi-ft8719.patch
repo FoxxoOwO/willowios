@@ -398,7 +398,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	unsigned errors = 0, ticks = 0, polls = 0;
  	while (!st.dead) {
  		if (st.diag == 2 && ++polls == 3000) {  /* ~30 s at 10 ms */
-@@ -709,9 +1033,10 @@
+@@ -709,14 +1033,15 @@
  		}
  		/* Optional IRQ hint still reads every 100ms, and always while down. */
  		if (!st.irq_hint || st.active ||
@@ -411,3 +411,8 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  			if (err) {
  				st.s_errs++;
  				st.s_lasterr = err;
+ 				if ((errors++ % 100u) == 0) {
+ 					printf("SWEET TOUCH: report err=%d irq=%#x\n", err, st.irq_status);
+ 				}
+ 			}
+ 		}
