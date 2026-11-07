@@ -1852,3 +1852,31 @@ ovatek-fw a 	opaz-blobs).
   5. Sestaven nový payload `xnu/out/payload-gui44.bin` (17 603 120 B) a zabalen boot image `shim/out/shim-evox-boot-gui44.img` (17 484 KB).
 - **Akce**:
   - Obraz `shim/out/shim-evox-boot-gui44.img` byl úspěšně odeslán a nabootován přes `fastboot boot` na zařízení `19126bfc` (`Sending 'boot.img' (17484 KB) OKAY [0.463s]`, `Booting OKAY [0.174s]`).
+
+
+### 9. Odhalení příčiny selhání dotyku (chybná CS polarita) a sestavení/bootování `gui45` s plnou GPU akcelerací (32 244 KB)
+- **Zjištění z boot logu `gui44` a live device tree v recovery**:
+  1. *Proč uživatel viděl pouze konzoli*:
+     - `sweetfb_noconsole=1` ztiší vykreslování konzole na displej až po **prvním swapu povrchů** (RenderServer / WindowServer).
+     - Obraz `gui44` byl zmenšen vynecháním `topaz-blobs`, aby se vešel pod 18 MB. Protože oddíl `userdata` byl nově naformátován a obnoven, `/private/var/tmp/libtopaz-inject.dylib` na něm ještě nebyl přítomen.
+     - Bez `topaz-inject` se nespustil auto-unlock a SpringBoard zůstal v pozadí bez zobrazení odemčeného UI a bez swapu, takže konzole zůstala viditelná.
+  2. *Kritický objev polarity SPI Chip Select (`spi-cs-high`)*:
+     - V referenčním DT na běžícím recovery (`/sys/firmware/devicetree/base/soc/spi@4a88000/touchpad/spi-cs-high`) existuje vlastnost **`spi-cs-high;`**.
+     - Původní autor patche 0953 v komentáři mylně předpokládal opak (`The DT has no spi-cs-high property, so CS is active LOW`).
+     - Kvůli tomu ovladač při každém přenosu stáhl CS na LOW (čip byl v tu chvíli deselectován!) a v klidu držel CS na HIGH (čip byl selektován, když se nic nevysílalo).
+     - NT36672A tak nemohl přijmout ani bajt a na reg `0x60` vracel `0x00`.
+     - Skutečná polarita: **CS aktivní HIGH**, v klidu **LOW**.
+  3. *Optimalizace velikosti pro fastboot boot (vejde se pod 32 348 KB)*:
+     - Odstraněním nepovinného podpisu `LC_CODE_SIGNATURE` (115 504 B) z `scratch/gpu_stripped/libOSMesa.8.dylib` (kernel v `sweet_amfi.c` vynucování podpisů nevyžaduje) klesla velikost blobu.
+     - Výsledný obraz `shim/out/shim-evox-boot-gui45.img` s kompletním `libOSMesa.8.dylib`, `libtopaz-gl.dylib`, `libtopaz-inject.dylib` i `novatek-fw` má **33 017 856 B (32 244 KB)**, což je o 106 KB méně než limit `fastboot boot` (33 124 352 B / 32 348 KB).
+- **Provedené opravy**:
+  1. V `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch` i přímo v binárce jádra opravena polarita CS na `spi-cs-high`:
+     - `0x51dc78`: `orr w12, w12, #2` -> `and w12, w12, #0xfffffffd` (v klidu CS = LOW).
+     - `0x51ffa4`: `and w12, w12, #0xfffffffd` -> `orr w12, w12, #2` (při přenosu CS = HIGH).
+     - `0x520234`: `orr w12, w12, #2` -> `and w12, w12, #0xfffffffd` (po přenosu CS = LOW).
+     - `0x520284`: `orr w12, w12, #2` -> `and w12, w12, #0xfffffffd` (při timeoutu CS = LOW).
+  2. Zdrojový commit `4209921` pushnut na `origin/main`, běží CI sestavení jádra `42406440023`.
+  3. Sestaven `xnu/out/payload-gui45.bin` (32 714 912 B) a zabalen boot image `shim/out/shim-evox-boot-gui45.img` (32 244 KB).
+- **Akce**:
+  - Zařízení restartováno z recovery do fastboot režimu.
+  - Obraz `shim/out/shim-evox-boot-gui45.img` úspěšně nabootován přes `fastboot boot` (`Sending 'boot.img' (32244 KB) OKAY [0.866s]`, `Booting OKAY [0.176s]`).
