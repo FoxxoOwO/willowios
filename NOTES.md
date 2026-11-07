@@ -1819,3 +1819,36 @@ ovatek-fw a 	opaz-blobs).
 - Vygenerován plný `xnu/out/willow.adt` (15 456 444 B) obsahující jak `novatek-fw`, tak `topaz-blobs`.
 - Sestaven `xnu/out/payload-gui42.bin` (32 967 296 B) a bootovací obraz `shim/out/shim-evox-boot-gui42.img` (32 488 KB).
 - Zařízení přepnuto z recovery do fastbootu a nabootováno přes `fastboot boot shim/out/shim-evox-boot-gui42.img`.
+
+
+### 7. Zjištění příčin selhání `gui42` a sestavení/bootování `gui43` (17 484 KB)
+- **Zjištění (pozorováno)**:
+  1. `shim/out/shim-evox-boot-gui42.img` měl velikost `33 267 712` B (`32 488 KB`), protože `willow.adt` obsahoval jak `blobs.bin` (`15,36 MB`), tak `novatek-fw` (`81,7 KB`). Tím překročil limit `32 348 KB` (`33 124 352` B) v low-DDR okně pro `fastboot boot`, takže `fastboot boot` selhal a telefon spadl do starého obrazu na interním oddílu `boot` (`gui41`).
+  2. Protože uživatelské knihovny (`/private/var/tmp/libOSMesa.8.dylib`, `libtopaz-gl.dylib`, `libtopaz-inject.dylib`) jsou již trvale uloženy na oddílu `userdata` (ověřeno v `sweet-log-gui41_firstboot.txt`), není nutné přikládat `15,36 MB` `blobs.bin` do `willow.adt`. Sestavení `xnu/out/willow.adt` pouze s `--touch-fw scratch/novatek_fw_packed.bin` má velikost `92 264` B a výsledný `shim/out/shim-evox-boot-gui43.img` má pouze `17 484 KB` (`17,9 MB`).
+  3. V CI běhu `42364374783` byl přeskočen patch `0959-willow-adreno-sm6125.patch` (na disku již opraven). V binárce `xnu/out/kernel.development.sweet` byly aplikovány přesné instrukční opravy patche `0959`:
+     - `0xae86b0`: `GPUCC_CX_GMU_CBCR` (`0x3600c` -> `0x7100c`)
+     - `0xae8710`: `GPUCC_CX_GFX3D_CBCR` (`0x36018` -> `0x71018`)
+     - `0xae98a8`: přeskočení `PIL_SHUTDOWN` (`0x42000206` SCM volání) skokem `b #0xfffffe0007aed90c`
+     - `0xae9a04`, `0xae9a38`, `0xae9a98`: `gpu_region` (`0x55b15000` -> `0x57515000`)
+  4. Porovnáním disassembleru `touch_nvt_download_fw` (`scratch/sweet_touch_disasm.txt`) s referenčním Android recovery kernelem (`scratch/recovery_nvt_core.txt`) ověřena shoda všech SPI registrů, stránek a CRC (`ILM` a `DLM`), a aplikovány 3 úpravy v `xnu/out/kernel.development.sweet` i v `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`:
+     - `0x51d3e4`: zkrácení prodlevy `sweettouchdelay` z `45` s na `8` s, aby se firmware nahrál před odemknutím SpringBoardu.
+     - `0x51dd20`, `0x51dd2c`, `0x51dd5c`, `0x51dd68`: NOP zápisů na `GPIO 87` (v live recovery pinctrl je `GPIO_87` `UNCLAIMED` a Android driver používá pouze softwarový bootloader reset `0x3f0fe <- 0x69`).
+     - `0x51dde8` a `0x51e5fc`: prodloužení čekání po `nvt_bootloader_reset` (`0x3f0fe <- 0x69`) a `nvt_boot_ready` (`0x3f10d <- 0x01`) z `5 ms` na `20 ms` (`20000 us`), přesně dle `recovery_kernel.bin`.
+- **Akce**:
+  - Obraz `shim/out/shim-evox-boot-gui43.img` (`17 484 KB`) byl úspěšně odeslán a nabootován přes `fastboot boot` na zařízení `19126bfc` (`Sending 'boot.img' (17484 KB) OKAY`, `Booting OKAY`).
+
+### 8. Obnova oddílu `userdata` z `iOSRoot-patched.simg` a sestavení/bootování `gui44` (17 484 KB)
+- **Zjištění z boot logu `gui43`**:
+  1. `hfs_ValidateHFSPlusVolumeHeader: unknown Volume Signature : 1020`: zjištěno, že uživatel v recovery omylem naformátoval oddíl `userdata` na F2FS (`0xF2F52010`). Kernel nemohl připojit rootfs a cyklil ve `vfs_mountroot`.
+  2. `SWEET TOUCH: WARNING: Novatek firmware boot timeout (reset state=0x00)`: ačkoliv se všech 8 sekcí odeslalo, MCU čip NT36672A neprovedl reset.
+  3. **Příčiny selhání dotyku odhaleny**:
+     - *Chybějící inženýrský reset*: v referenčním Android jádru (`recovery_kernel.bin` na `0xffffff80089aa1a0`) se PŘED bootloader resetem (`0x3f0fe <- 0x69`) VŽDY zapisuje `0x5a` na stránku `0x7fff80` reg `0x00` a čeká 20 ms (`nvt_eng_reset()`).
+     - *Chybný TLMM pinmux*: v `pinctrl-sm6125.c` je `qup02` na pinech 6, 7, 8 první funkcí `f1` (`mux = 1`). V `gui37` byl chybně nastaven `mux = 2` (`0xc8`, `0x2c8`), protože autor zaměnil název registrového bloku `WEST` za funkci! Tím byly piny 6, 7, 8 propojeny na `ddr_bist` / `gp_pdm1` namísto `qup02`.
+- **Provedené opravy**:
+  1. Oddíl `userdata` byl po potvrzení uživatelem kompletně obnoven z `scratch/iOSRoot-patched.simg` (11,47 GB, 15 sparse částí zapsáno za 1416 s).
+  2. V ovladači `sweet_touch.c` i v binárce `xnu/out/kernel.development.sweet.gui44` opraven TLMM pinmux na `mux = 1` (`0xc4` na GPIO 6 a `0x2c4` na GPIO 7/8).
+  3. Do inicializační sekvence na adresu `0x51dd20` vložen blok `nvt_eng_reset()` (stránka `0x7fff80`, reg `0x00 <- 0x5a`, delay 20 ms).
+  4. Aktualizován patch `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`.
+  5. Sestaven nový payload `xnu/out/payload-gui44.bin` (17 603 120 B) a zabalen boot image `shim/out/shim-evox-boot-gui44.img` (17 484 KB).
+- **Akce**:
+  - Obraz `shim/out/shim-evox-boot-gui44.img` byl úspěšně odeslán a nabootován přes `fastboot boot` na zařízení `19126bfc` (`Sending 'boot.img' (17484 KB) OKAY [0.463s]`, `Booting OKAY [0.174s]`).

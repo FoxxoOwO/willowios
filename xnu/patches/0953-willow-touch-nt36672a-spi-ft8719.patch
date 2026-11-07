@@ -148,17 +148,17 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	printf("SWEET TOUCH: downloading Novatek firmware (%u sections, %u bytes)...\n",
 +	    num_sections, fw_size);
 +
-+	/* 1. Hardware reset: GPIO 87 LOW 10ms -> HIGH 50ms */
-+	touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
-+	delay(10000);
-+	touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);
-+	delay(50000);
++	/* 0. Engineering reset sequence (page 0x7fff80, reg 0x00 <- 0x5a, wait 20ms) */
++	touch_nvt_set_page(0x7fff80);
++	uint8_t cmd_eng[1] = { 0x5a };
++	touch_nvt_spi_write(0x00, cmd_eng, 1);
++	delay(20000);
 +
-+	/* 2. Bootloader reset sequence */
++	/* 1. Bootloader reset sequence (GPIO 87 is unclaimed in willow DT; use SW reset) */
 +	touch_nvt_set_page(0x3f0fe);
 +	uint8_t cmd_rst[1] = { 0x69 };
 +	touch_nvt_spi_write(0x7e, cmd_rst, 1);
-+	delay(5000);
++	delay(20000);
 +	touch_nvt_set_page(0x3f310);
 +	uint8_t cmd_stop[1] = { 0x00 };
 +	touch_nvt_spi_write(0x10, cmd_stop, 1);
@@ -228,11 +228,11 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	uint8_t hs1[1] = { 0xae };
 +	touch_nvt_spi_write(0x50, hs1, 1);
 +
-+	/* 7. Boot ready: page 0x3f10d -> write {0x8d, 0x01} -> delay 5ms */
++	/* 7. Boot ready: page 0x3f10d -> write {0x8d, 0x01} -> delay 20ms */
 +	touch_nvt_set_page(0x3f10d);
 +	uint8_t bld_rdy[1] = { 0x01 };
 +	touch_nvt_spi_write(0x0d, bld_rdy, 1);
-+	delay(5000);
++	delay(20000);
 +
 +	/* 8. Check reset state: page 0x21c00 -> poll reg 0x60; wait until buf[1] in 0xa0..0xaf */
 +	touch_nvt_set_page(0x21c00);
@@ -358,16 +358,16 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	if (st.spi_mode) {
 +		/*
 +		 * willow: Novatek NT36672A SPI on QUP0 SE2. DT qupv3_se2_spi_active muxes
-+		 * gpio6/7/8/9 to function "qup02", which is index 2 in the SM6125 pin
-+		 * function table (funcs[0]=gpio, [1]=WEST, [2]=qup02) -- mux=1 would leave
-+		 * SCLK/MOSI/MISO disconnected from the SE. CS stays a plain GPIO (mux 0).
++		 * gpio6/7/8/9 to function "qup02", which is index 1 in the SM6125 pin
++		 * function table (funcs[0]=gpio, [1]=qup02) -- WEST is the register tile name.
++		 * mux=1 (bit 2 = 1, CTL 0xc4 / 0x2c4). CS stays a plain GPIO (mux 0, active-low).
 +		 */
 +		st.irq_pin = WILLOW_PIN_IRQ;
 +		st.irq_hint = 0;
 +		touch_gpio(WILLOW_PIN_IRQ, 0, 3, 3, false, false);       /* IRQ input */
-+		touch_gpio(6, 2, 0, 3, false, false);                    /* SPI MISO, func qup02 */
-+		touch_gpio(7, 2, 0, 3, true, false);                     /* SPI MOSI, func qup02 */
-+		touch_gpio(8, 2, 0, 3, true, false);                     /* SPI SCLK, func qup02 */
++		touch_gpio(6, 1, 0, 3, false, false);                    /* SPI MISO, func qup02 (mux 1) */
++		touch_gpio(7, 1, 0, 3, true, false);                     /* SPI MOSI, func qup02 (mux 1) */
++		touch_gpio(8, 1, 0, 3, true, false);                     /* SPI SCLK, func qup02 (mux 1) */
 +		/* CS idle HIGH (deasserted, the chip select is active low). */
 +		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
 +		DTEntry chosen;
