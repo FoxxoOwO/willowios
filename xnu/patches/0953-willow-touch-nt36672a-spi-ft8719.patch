@@ -39,8 +39,8 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  
 +/*
 + * willow: full-duplex GENI SPI transfer on QUP0 SE2 (spi@4a88000) with manual
-+ * CS on GPIO 9. The DT has no spi-cs-high property, so CS is active LOW:
-+ * Idle: CS=HIGH (deasserted), Transfer: CS=LOW (asserted), Done: CS=HIGH.
++ * CS on GPIO 9. DT specifies spi-cs-high, so CS is active HIGH:
++ * Idle: CS=LOW (deasserted), Transfer: CS=HIGH (asserted), Done: CS=LOW.
 + */
 +static int
 +touch_spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned len)
@@ -51,8 +51,8 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
 +		return EBUSY;
 +	}
-+	/* CS asserted LOW for the whole transaction (active-low chip select). */
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
++	/* CS asserted HIGH for the whole transaction (spi-cs-high). */
++	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
 +	delay(2);
 +	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
 +	touch_wr(st.se, SE_TX_LEN, len);
@@ -81,15 +81,15 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		if ((irq & SE_DONE) && got >= len) {
 +			touch_wr(st.se, SE_IRQ_CLR, irq);
 +			delay(2);
-+			/* CS deasserted HIGH after the transaction. */
-+			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
++			/* CS deasserted LOW after the transaction. */
++			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
 +			return 0;
 +		}
 +		delay(1);
 +	}
 +	touch_abort();
-+	/* CS deasserted HIGH on timeout as well. */
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
++	/* CS deasserted LOW on timeout as well. */
++	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
 +	return ETIMEDOUT;
 +}
 +
@@ -368,8 +368,8 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_gpio(6, 1, 0, 3, false, false);                    /* SPI MISO, func qup02 (mux 1) */
 +		touch_gpio(7, 1, 0, 3, true, false);                     /* SPI MOSI, func qup02 (mux 1) */
 +		touch_gpio(8, 1, 0, 3, true, false);                     /* SPI SCLK, func qup02 (mux 1) */
-+		/* CS idle HIGH (deasserted, the chip select is active low). */
-+		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
++		/* CS idle LOW (deasserted, DT has spi-cs-high: active HIGH). */
++		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
 +		DTEntry chosen;
 +		void const *fw_prop = NULL;
 +		unsigned int fw_size = 0;
