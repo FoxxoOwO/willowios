@@ -3,10 +3,11 @@ Subject: [PATCH 953/954] willow: Novatek NT36672A GENI SPI touchscreen driver on
 diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -33,11 +33,18 @@
+@@ -33,11 +33,19 @@
  #define TOUCH_PIN_RESET  86u
  #define TOUCH_PIN_IRQ    80u
  #define TOUCH_PIN_AVDD   36u
++#include <pexpert/device_tree.h>
 +/* willow (Redmi Note 8T): spi@4a88000 (QUP0 SE2), reset GPIO87, IRQ GPIO88 (west tile: TLMM 0x400000 + 0x100000 = 0x500000) */
 +#undef TOUCH_WEST_PA
 +#define TOUCH_WEST_PA    0x00500000u /* willow (SM6125): west tile at 0x500000; pins 6-9,87,88 are WEST */
@@ -22,7 +23,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  /* GT9896 is Yellowstone in Xiaomi sweet-r-oss, not the Berlin protocol. */
  #define GOODIX_PID_REG   0x4022u
  #define GOODIX_EVENT_REG 0x4180u
-@@ -79,7 +86,8 @@
+@@ -79,7 +87,8 @@
  
  static struct {
  	vm_offset_t se, gcc, west, east;
@@ -32,7 +33,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	int kind, irq_hint;
  	uint32_t irq_status, irq_last, active;
  	unsigned sent, got;
-@@ -552,6 +560,143 @@
+@@ -552,6 +561,282 @@
  	return 0;
  }
  
@@ -119,6 +120,145 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	return touch_spi_xfer(tx, NULL, sizeof(tx));
 +}
 +
++static int
++touch_nvt_spi_write(uint8_t addr, const uint8_t *data, unsigned len)
++{
++	uint8_t tx[72] = { 0 };
++	if (len + 1 > sizeof(tx)) {
++		return EINVAL;
++	}
++	tx[0] = (addr & 0x7fu) | 0x80u;
++	if (data && len > 0) {
++		memcpy(&tx[1], data, len);
++	}
++	return touch_spi_xfer(tx, NULL, len + 1);
++}
++
++static int
++touch_nvt_download_fw(const void *fw_blob, unsigned fw_size)
++{
++	if (!fw_blob || fw_size < 4) {
++		printf("SWEET TOUCH: no Novatek firmware in /chosen/novatek-fw\n");
++		return ENOENT;
++	}
++	const uint8_t *p = (const uint8_t *)fw_blob;
++	const uint8_t *end = p + fw_size;
++	uint32_t num_sections = *(const uint32_t *)p;
++	p += 4;
++	printf("SWEET TOUCH: downloading Novatek firmware (%u sections, %u bytes)...\n",
++	    num_sections, fw_size);
++
++	/* 1. Hardware reset: GPIO 87 LOW 10ms -> HIGH 50ms */
++	touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
++	delay(10000);
++	touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);
++	delay(50000);
++
++	/* 2. Bootloader reset sequence */
++	touch_nvt_set_page(0x3f0fe);
++	uint8_t cmd_rst[1] = { 0x69 };
++	touch_nvt_spi_write(0x7e, cmd_rst, 1);
++	delay(5000);
++	touch_nvt_set_page(0x3f310);
++	uint8_t cmd_stop[1] = { 0x00 };
++	touch_nvt_spi_write(0x10, cmd_stop, 1);
++
++	/* 3. Download sections into SRAM */
++	for (uint32_t s = 0; s < num_sections; s++) {
++		if (p + 8 > end) {
++			break;
++		}
++		uint32_t sram_addr = *(const uint32_t *)p;
++		uint32_t length = *(const uint32_t *)(p + 4);
++		p += 8;
++		if (p + length > end) {
++			break;
++		}
++		const uint8_t *payload = p;
++		uint32_t rem = length;
++		uint32_t cur_addr = sram_addr;
++		while (rem > 0) {
++			uint32_t chunk = rem;
++			if (chunk > 64) {
++				chunk = 64;
++			}
++			uint32_t page_rem = 128 - (cur_addr & 0x7fu);
++			if (chunk > page_rem) {
++				chunk = page_rem;
++			}
++			touch_nvt_set_page(cur_addr);
++			uint8_t tx[66];
++			tx[0] = (uint8_t)((cur_addr & 0x7fu) | 0x80u);
++			memcpy(&tx[1], payload, chunk);
++			touch_spi_xfer(tx, NULL, chunk + 1);
++			payload += chunk;
++			cur_addr += chunk;
++			rem -= chunk;
++		}
++		p += (length + 3u) & ~3u;
++	}
++
++	/* 4. Set CRC info for ILM & DLM on page 0x3f100 */
++	touch_nvt_set_page(0x3f100);
++	uint8_t ilm_des[3] = { 0x00, 0x00, 0x00 };
++	touch_nvt_spi_write(0x28, ilm_des, 3);
++	uint8_t ilm_len[2] = { 0x1f, 0xed };
++	touch_nvt_spi_write(0x18, ilm_len, 2);
++	uint8_t ilm_crc[4] = { 0x1d, 0x2f, 0xbb, 0x40 };
++	touch_nvt_spi_write(0x00, ilm_crc, 4);
++
++	uint8_t dlm_des[3] = { 0x00, 0x77, 0x02 };
++	touch_nvt_spi_write(0x2c, dlm_des, 3);
++	uint8_t dlm_len[2] = { 0x17, 0x03 };
++	touch_nvt_spi_write(0x30, dlm_len, 2);
++	uint8_t dlm_crc[4] = { 0x4c, 0x87, 0x25, 0xa5 };
++	touch_nvt_spi_write(0x04, dlm_crc, 4);
++
++	/* 5. CRC enable: page 0x3f30e -> read reg 0x0e, OR with 0x80, write back */
++	touch_nvt_set_page(0x3f30e);
++	uint8_t crc_val[2] = { 0 };
++	touch_nvt_spi_read(0x0e, crc_val, 1);
++	uint8_t crc_en[1] = { (uint8_t)(crc_val[1] | 0x80u) };
++	touch_nvt_spi_write(0x0e, crc_en, 1);
++
++	/* 6. Handshake / FW CRC enable: page 0x21c00 -> write {0x60, 0x00}, write {0x50, 0xae} */
++	touch_nvt_set_page(0x21c00);
++	uint8_t hs0[1] = { 0x00 };
++	touch_nvt_spi_write(0x60, hs0, 1);
++	uint8_t hs1[1] = { 0xae };
++	touch_nvt_spi_write(0x50, hs1, 1);
++
++	/* 7. Boot ready: page 0x3f10d -> write {0x8d, 0x01} -> delay 5ms */
++	touch_nvt_set_page(0x3f10d);
++	uint8_t bld_rdy[1] = { 0x01 };
++	touch_nvt_spi_write(0x0d, bld_rdy, 1);
++	delay(5000);
++
++	/* 8. Check reset state: page 0x21c00 -> poll reg 0x60; wait until buf[1] in 0xa0..0xaf */
++	touch_nvt_set_page(0x21c00);
++	uint8_t rst_buf[6] = { 0 };
++	int rst_ok = 0;
++	for (int i = 0; i < 50; i++) {
++		memset(rst_buf, 0, sizeof(rst_buf));
++		touch_nvt_spi_read(0x60, rst_buf, 5);
++		if (rst_buf[1] >= 0xa0u && rst_buf[1] <= 0xafu) {
++			printf("SWEET TOUCH: Novatek firmware booted OK (reset state=0x%02x, poll %d)\n",
++			    rst_buf[1], i);
++			rst_ok = 1;
++			break;
++		}
++		delay(10000);
++	}
++	if (!rst_ok) {
++		printf("SWEET TOUCH: WARNING: Novatek firmware boot timeout (reset state=0x%02x)\n",
++		    rst_buf[1]);
++	}
++
++	/* 9. Leave page at 0x21c00 for touch_novatek_spi() */
++	touch_nvt_set_page(0x21c00);
++	return rst_ok ? 0 : EIO;
++}
++
 +/*
 + * Novatek NT36672A SPI 65-byte touch report parser (nt36xxx_spi_c3j):
 + * 6-byte point records at buf[1 + 6 * i]:
@@ -176,7 +316,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  static bool
  touch_se_init(void)
  {
-@@ -564,10 +709,12 @@
+@@ -564,10 +849,12 @@
  	printf("SWEET TOUCH: se2 fw=%#x proto=%u status=%#x tx=%#x rx=%#x ios=%#x\n",
  	    fw, (fw >> 8) & 0xffu, touch_rd(st.se, SE_STATUS), tx, rx,
  	    touch_rd(st.se, 0x908));
@@ -191,7 +331,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  		return false;
  	}
  	if (touch_rd(st.se, SE_STATUS) & 0x1001u) {
-@@ -585,8 +732,17 @@
+@@ -585,8 +872,17 @@
  	touch_wr(st.se, 0x24, 0x7f);
  	touch_wr(st.se, 0x20, 1);
  	touch_wr(st.se, SE_CLK_SEL, 0);
@@ -211,7 +351,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	/* Linux 8-bit I2C packing: MSB on the wire, LSB byte first in FIFO. */
  	touch_wr(st.se, 0x254, 0);
  	touch_wr(st.se, 0x260, SE_PACK0);
-@@ -650,6 +806,38 @@
+@@ -650,6 +946,32 @@
  	    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_RESET)),
  	    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)),
  	    touch_rd(st.east, TOUCH_GPIO_IO(TOUCH_PIN_AVDD)));
@@ -230,19 +370,13 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_gpio(8, 2, 0, 3, true, false);                     /* SPI SCLK, func qup02 */
 +		/* CS idle HIGH (deasserted, the chip select is active low). */
 +		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
-+		/* Hardware reset: GPIO 87 LOW 10ms -> HIGH 50ms */
-+		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, false);
-+		delay(10000);
-+		touch_gpio(WILLOW_PIN_RESET, 0, 3, 3, true, true);
-+		delay(50000);
-+		/* Bootloader reset sequence */
-+		uint8_t cmd_page[3] = { 0xffu, 0x07u, 0xe1u };          /* nvt_set_page(0x3f0fe) */
-+		(void)touch_spi_xfer(cmd_page, NULL, 3);
-+		uint8_t cmd_rst[2] = { 0xfeu, 0x69u };                   /* write 0x69 to reg 0x7e (SPI_WRITE_MASK=0x80) */
-+		(void)touch_spi_xfer(cmd_rst, NULL, 2);
-+		delay(60000);                                             /* 60ms for firmware boot */
-+		uint8_t cmd_zero[3] = { 0xffu, 0x00u, 0x00u };          /* nvt_set_page(0x0) */
-+		(void)touch_spi_xfer(cmd_zero, NULL, 3);
++		DTEntry chosen;
++		void const *fw_prop = NULL;
++		unsigned int fw_size = 0;
++		if (SecureDTLookupEntry(NULL, "/chosen", &chosen) == kSuccess) {
++			(void)SecureDTGetProperty(chosen, "novatek-fw", &fw_prop, &fw_size);
++		}
++		(void)touch_nvt_download_fw(fw_prop, fw_size);
 +		st.kind = TOUCH_NVT_SPI;
 +		goto start_polling;
 +	}
@@ -250,7 +384,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	/* TopazTouch touch.c: IRQ input, AVDD on, I2C pins, then the reset pulse. */
  	touch_gpio(TOUCH_PIN_IRQ, 0, 3, 3, false, false);       /* CTL 0xc3 */
  	touch_gpio(TOUCH_PIN_AVDD, 0, 3, 3, true, true);        /* CTL 0x2c3, high */
-@@ -694,9 +882,11 @@
+@@ -694,9 +1016,11 @@
  		goto out;
  	}
  	st.kind = goodix ? TOUCH_GOODIX : TOUCH_FTS;
@@ -264,7 +398,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	unsigned errors = 0, ticks = 0, polls = 0;
  	while (!st.dead) {
  		if (st.diag == 2 && ++polls == 3000) {  /* ~30 s at 10 ms */
-@@ -709,9 +899,10 @@
+@@ -709,9 +1033,10 @@
  		}
  		/* Optional IRQ hint still reads every 100ms, and always while down. */
  		if (!st.irq_hint || st.active ||
