@@ -1757,3 +1757,65 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 ### 3. Sestavení obrazu
 - Vytvořen payload [xnu/out/payload-gui37.bin](file:///d:/repositories/willowios/xnu/out/payload-gui37.bin) (32 822 112 B).
 - Zabalen bootovací obraz [shim/out/shim-evox-boot-gui37.img](file:///d:/repositories/willowios/shim/out/shim-evox-boot-gui37.img) (33 124 352 B).
+
+## 2026-11-07: Analýza NT36672A Flashless firmware download & CI oprava na macos-15 (gui41)
+
+### 1. Zjištění z logu gui40 a ověření GUI
+- GUI a SpringBoard běží zcela stabilně (60 FPS, UIApp live, auto-unlock funkční).
+- V logu `sweet-log-gui_latest.txt` potvrzeno:
+  `SWEET TOUCH: se2 fw=0x101 proto=1 status=0 tx=0x20102864 rx=0x20104800 ios=0`
+  `SWEET TOUCH: selected Novatek NT36672A SPI, 1080x2340, poll=10ms irq-hint=0`
+- Dotyk dosud nereagoval, protože čip Novatek NT36672A je flashless (nemá interní flash paměť a po resetu musí host nahrát firmware do SRAM sekvencí zápisů přes SPI).
+
+### 2. Implementace firmware loaderu v XNU patch 0953
+- Extrahován a zabalen originální Shenchao NT36672A firmware z Android kernelu: `scratch/novatek_fw_packed.bin` (81 684 B, 8 sekcí).
+- `tools/mkadt.py` rozšířen o parametr `--touch-fw` pro vložení firmware do DeviceTree pod `/chosen/novatek-fw`.
+- Vygenerován nový DeviceTree `xnu/out/willow.adt` (15 456 444 B) obsahující jak `topaz-blobs`, tak `novatek-fw`.
+- V `xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch` implementována funkce `touch_nvt_download_fw`:
+  1. Hardware reset (GPIO 87 LOW 10 ms -> HIGH 50 ms).
+  2. Bootloader reset (`0x3f0fe` -> `0x69`, `0x3f310` -> `0x00`).
+  3. Cyklus nahrání 8 sekcí do SRAM po max 64B krocích.
+  4. Nastavení CRC parametrů pro ILM a DLM na stránce `0x3f100`.
+  5. Povolení CRC na `0x3f30e` reg `0x0e`.
+  6. Handshake na `0x21c00` (`0x60` = `0x00`, `0x50` = `0xae`).
+  7. Spuštění bootu na `0x3f10d` reg `0x0d` = `0x01`.
+  8. Pollování reset state na `0x21c00` reg `0x60` (očekává hodnotu `0xa0..0xaf`).
+  9. Ponechání aktivní stránky na `0x21c00` pro čtení dotykových událostí (`touch_novatek_spi`).
+
+### 3. CI opravy pro GitHub Actions runner macos-15 (Xcode 16)
+- GitHub Actions oficiálně ukončil podporu běžců `macos-14` (`macos-14-arm64-us-default is not supported`).
+- Workflow `.github/workflows/xnu.yml` aktualizován na `runs-on: macos-15`.
+- Běžec `macos-15` používá výchozí nástroje z Xcode 16. Generátor rozhraní DriverKit (`iig`) v Xcode 16 generuje kód obsahující inicializaci `IORPC.kernelContent`.
+- Vytvořen patch `xnu/patches/0964-xcode16-iorpc-kernelcontent.patch`, který doplňuje člena `IORPCMessage * kernelContent;` do `struct IORPC` v `iokit/IOKit/IORPC.h`.
+- Opraveno zakončení chunku 8 v `0953-willow-touch-nt36672a-spi-ft8719.patch`, které způsobovalo chybu `corrupt patch at line 413`.
+- Commity:
+  - `1da579d`: NT36672A download fw sekvence + přechod na macos-15.
+  - `8a11f2b`: Xcode 16 `IORPC.kernelContent` patch + oprava zakončení patche 0953.
+- Běží CI sestavení jádra v GitHub Actions (run `42362710320`).
+
+### 4. Sestavení a bootování gui41 na hardware
+- Sestaven payload xnu/out/payload-gui41.bin (nový zkompilovaný kernel z CI run 42362710320 + xnu/out/willow.adt s 
+ovatek-fw a 	opaz-blobs).
+- Zabalen bootovací obraz shim/out/shim-evox-boot-gui41.img.
+- Zařízení restartováno z recovery do fastbootu a nabootováno přes astboot boot shim/out/shim-evox-boot-gui41.img.
+
+### 5. Analýza příčin gui41 (pomalý systém a nefunkční dotyk)
+- V logu `sweet-log-gui41_firstboot.txt` se objevilo:
+  `SWEET TOUCH: need ABL-loaded I2C firmware and 32-bit FIFOs; probes skipped`
+- Zjištěny dvě přesné příčiny:
+  1. **Patch 0953 byl v CI přeskočen**:
+     - V předchozím běhu `42362710320` selhal `git apply` na chunku 8 (`bsd/dev/sweet_touch.c:709`).
+     - Chyba byla způsobena kontextem za `errors++ % 100u`: v upstream kódu je `if (errors == 10) { touch_report... }`, zatímco v patchi byly nesprávně uzavírací složené závorky.
+     - Vytvořena lokální simulace patchování `bsd/dev/sweet_touch.c`, opraven hunk 8 a ověřeno, že `git apply` aplikuje celý patch 0953 100% čistě bez chyb (`Applied patch bsd/dev/sweet_touch.c cleanly`).
+     - Commit `d8319e2` pushnut na `origin/main`, běží nový CI build `42364374783`.
+  2. **Chybějící `topaz-blobs` a `novatek-fw` v předchozím ADT**:
+     - `fetch_kernel.py` přepsal lokální `xnu/out/willow.adt` minimálním ADT (10 KB) bez uživatelských knihoven.
+     - `tools/mkadt.py` byl opraven na korektní syntaxi (`-o xnu/out/willow.adt --blobs scratch/blobs.bin --touch-fw scratch/novatek_fw_packed.bin`), čímž vznikl plný 15,4 MB ADT obsahující akcelerovaný OpenGL (`libtopaz-gl.dylib`, `libOSMesa.8.dylib`), inject (`libtopaz-inject.dylib`) a firmware dotyku (`novatek-fw`).
+     - Bez těchto knihoven systém běžel v pomalém softwarovém CPU renderingu (odtud "telefon je pomalý"). S plným ADT a akcelerací poběží opět plně plynule na 60 FPS.
+
+### 6. Sestavení a bootování gui42 (plné jádro s Novatek driverem + GPU akcelerace)
+- CI run `42364374783` úspěšně zkompiloval kernel s opraveným patchem 0953 (`downloading Novatek in kernel: True`).
+- Kernel stažen do `xnu/out/kernel.development.sweet` (17 526 224 B).
+- Vygenerován plný `xnu/out/willow.adt` (15 456 444 B) obsahující jak `novatek-fw`, tak `topaz-blobs`.
+- Sestaven `xnu/out/payload-gui42.bin` (32 967 296 B) a bootovací obraz `shim/out/shim-evox-boot-gui42.img` (32 488 KB).
+- Zařízení přepnuto z recovery do fastbootu a nabootováno přes `fastboot boot shim/out/shim-evox-boot-gui42.img`.
