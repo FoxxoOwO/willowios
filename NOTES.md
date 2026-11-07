@@ -1726,3 +1726,34 @@ Symbolicate backboardd t0 `0x102b51e40 - 0x102b48000 = 0x9e40` to identify which
 - Sestaven `scratch/blobs.bin` a `xnu/out/willow.adt` (15 374 724 B).
 - Kernel převzat z osvědčeného `payload-gui35.bin` (obsahuje TLMM base `0x00400000`, 60 FPS, ověřený mount).
 - Sestaven `xnu/out/payload-gui36.bin` (32 822 112 B) a boot image `shim/out/shim-evox-boot-gui36.img` (33 124 352 B).
+
+## 2026-11-07: Úspěšný auto-unlock v gui36 & Nalezena a opravena příčina nefunkčního dotyku (gui37)
+
+### 1. Zjištění z logu gui36 (sweet-log-gui36_touch.txt, 4317 řádků, 324 051 B, flush #31)
+1. **Auto-Unlock SpringBoardu plně funguje**:
+   - V řádku 2106 a 2118:
+     `topaz-inject: UIApp instance is live`
+     `topaz-inject: SpringBoard unlocked via unlockUIFromSource:17`
+   - SpringBoard již po náběhu nepadá, zůstává běžet a odemyká se přímo do uživatelského rozhraní!
+2. **Proč dotyk v gui36 nefungoval**:
+   - Log se zastavil na řádku 318:
+     `SWEET TOUCH: TLMM reset=0 irq=0 avdd=0`
+     a žádný další výpis z dotykového driveru již nepřišel.
+   - **Disassemblováním binárky kernelu nalezena kritická chyba v inicializaci dotyku**:
+     1. Na adrese `0xfffffe0007534b08` byl registr `x20` použit pro offset GPIO 88 (`0x58000`), ale `x20` nebyl v této funkci vůbec inicializován (obsahoval náhodnou hodnotu z volajícího). Instrukce `ldr w8, [x9, x20]` a `str w8, [x9, x20]` způsobily přístup mimo mapovaný rozsah (data abort / pád vlákna dotyku).
+     2. Mux hodnoty pro GPIO 6 (MISO) a 7, 8 (MOSI, SCLK) byly `0xc4` a `0x2c4` (mux=1), namísto `0xc8` a `0x2c8` (mux=2, funkce `qup02`). Piny tak nebyly propojeny s QUP0 SE2.
+     3. Polarita CS: CS byl nastaven na idle LOW a active HIGH, ačkoliv DT i hardware čipu NT36672A vyžadují active LOW (idle HIGH, transfer LOW, return to HIGH).
+
+### 2. Opravy v gui37 (scratch/patch_payload_gui37.py)
+1. `0xfffffe0007534b08`: `mov w0, #0x14` nahrazeno `lsl w20, w8, #12` (`0x53144d14`), čímž se `w20` nastaví na správných `0x58000` (GPIO 88 CFG).
+2. `0xfffffe0007534af8`: `mov w11, #0xc4` opraveno na `mov w11, #0xc8` (`0x5280190b`, mux=2 `qup02` pro GPIO 6 MISO).
+3. `0xfffffe0007534b00`: `mov w12, #0x2c4` opraveno na `mov w12, #0x2c8` (`0x5280590c`, mux=2 `qup02` pro GPIO 7/8 MOSI/SCLK).
+4. CS polarita opravena ve všech 4 bodech:
+   - `0xfffffe0007534bb0`: `orr w12, w12, #2` (CS idle HIGH v touch_init).
+   - `0xfffffe00075369c0`: `and w12, w12, #0xfffffffd` (CS active LOW v touch_spi_xfer).
+   - `0xfffffe0007536c48`: `orr w12, w12, #2` (CS návrat do idle HIGH v touch_spi_xfer done).
+   - `0xfffffe0007536c94`: `orr w12, w12, #2` (CS návrat do idle HIGH v touch_spi_xfer timeout).
+
+### 3. Sestavení obrazu
+- Vytvořen payload [xnu/out/payload-gui37.bin](file:///d:/repositories/willowios/xnu/out/payload-gui37.bin) (32 822 112 B).
+- Zabalen bootovací obraz [shim/out/shim-evox-boot-gui37.img](file:///d:/repositories/willowios/shim/out/shim-evox-boot-gui37.img) (33 124 352 B).
