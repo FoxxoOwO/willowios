@@ -1915,3 +1915,19 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
     `Sending 'boot.img' (32244 KB) OKAY [0.869s]`
     `Booting OKAY [0.174s]`.
 
+### 13. Zjištění z logu `gui46` a sestavení/bootování `gui47` (2026-11-12)
+- **Zjištění z logu a displeje `gui46`**:
+  1. *GPU a SpringBoard*: Adreno 610 a OpenGL fungují spolehlivě na 60 FPS (`redwood-gl: frame 1860`), `topaz-inject` je aktivní a na displeji se pod konzolí točí bílý iOS spinner.
+  2. *Dotyk Novatek*: Sběrnice vracela samé jedničky `0xFF` (`Novatek chip ID = ff ff ff ff ff ff`, `reset state=0xff`).
+  3. *Příčina*: Softwarový `GPIO_OE = 1` nastavený v `touch_gpio()` na pinech 7, 8, 9 držel softwarový latch 0, čímž bojoval s QUP SPI blokem. Navíc polarita `spi-cs-high` (`OUTPUT_INV = 1`) byla neověřená hypotéza; standardní NT36672A může vyžadovat standardní Active LOW (`OUTPUT_INV = 0`).
+- **Opravy v `gui47` (patch 0953, commit `ed10909`)**:
+  1. Všechny 4 piny (`GPIO 6, 7, 8, 9`) mají nyní `out = false` (`OE = 0`), takže pad buffery jsou řízeny výhradně hardwarovým SPI engine `qup02`.
+  2. Do `touch_nvt_download_fw()` přidána automatická detekce polarity CS: testuje nejprve `inv = 0` (Active LOW) a poté `inv = 1` (Active HIGH). Pokud čip vrátí své ID (`0x0A` / `0x0B`), ovladač se uzamkne na zjištěné polaritě.
+- **Sestavení a bootování**:
+  - GitHub Actions CI běh `43267325274` úspěšně zkompiloval jádro za 6 min 30 s.
+  - Sestaven `xnu/out/payload-gui47.bin` (32 714 912 B) a `shim/out/shim-evox-boot-gui47.img` (33 017 856 B / 32 244 KB).
+  - Obraz úspěšně odeslán a spuštěn přes `fastboot boot` na zařízení `19126bfc`:
+    `Sending 'boot.img' (32244 KB) OKAY [0.870s]`
+    `Booting OKAY [0.176s]`.
+
+
