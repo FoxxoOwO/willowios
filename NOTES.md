@@ -1880,3 +1880,11 @@ ovatek-fw a 	opaz-blobs).
 - **Akce**:
   - Zařízení restartováno z recovery do fastboot režimu.
   - Obraz `shim/out/shim-evox-boot-gui45.img` úspěšně nabootován přes `fastboot boot` (`Sending 'boot.img' (32244 KB) OKAY [0.866s]`, `Booting OKAY [0.176s]`).
+
+### 10. Analýza portů na unixnu.com/devices (2026-11-12)
+- Stránky zařízení jsou jen rozcestníky na GitHub repozitáře (354 repo). Hledání 
+t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGeniSpi (sheng, SM8550), Allenwdk/UniXNU-uke (SM8750) - oba NT36532E přes GENI SPI, **ověřeno na hardware** (firmware download, frames, HID). Cheeseburger je Synaptics I2C (nepoužitelné).
+- Protokol NT36532E (THP, matice 60x40) je jiný než náš NT36672A (klasický nt36xxx SPI), ale vrstva GENI SPI je stejná. Porovnání s naším sweet_touch.c: shodné jsou packing (0x7f8fe/0xffefe), word len (0x268=4), M_CMD0 TX_RX=3, TX/RX_TRANS_LEN, output ctrl/force default.
+- **Rozdíl**: oba porty (a Linux recovery spi_geni_prepare_transfer_hardware) používají **HW chip select**: všechny 4 piny (MISO/MOSI/CLK/CS) mux na funkci qupXX, SE_SPI_DEMUX_SEL(0x250)=0, SE_SPI_TRANS_CFG(0x25c) bez CS_TOGGLE (bit1), a pro spi-cs-high se zapisuje SE_SPI_DEMUX_OUTPUT_INV(0x24c) = 1<<cs. My CS (GPIO 9) togglujeme ručně jako GPIO a 0x24c nepíšeme.
+- Návrh gui46 (neprovedeno): pin 9 -> mux 1 (qup02), 0x250=0, 0x24c=1, 0x25c &= ~2, v 	ouch_spi_xfer zrušit ruční CS.
+- Staženo do scratch/unixnu/ (nepatří do gitu).
