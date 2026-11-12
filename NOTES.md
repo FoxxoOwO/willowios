@@ -1895,4 +1895,23 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
 - **Chybí u nás**: vendor probe po eng_reset a bootloader_reset vždy čte ID čipu (page 0x1F600, reg 0x4E, 7 bajtů, 5 pokusů) a teprve pak stahuje FW. My čtení nikdy neověřujeme, takže nevíme, zda RX cesta SPI vůbec funguje (reset state 0x00 může být jen špatné čtení).
 - NT36672A je TDDI: TP reset = LCD reset (`set_lcd_reset_gpio_keep_high`); LCD RESX se nesmí shodit.
 - FW je per panel (novatek_ts_fw.bin / tianma / ebbg); panel na willow je shenchao (viz dmesg dsi_nt36672a_shenchao). Ověřit, že novatek_fw_packed.bin je pro tento panel.
-- Další krok gui46: (1) po bootloader_reset přečíst a vypsat ID čipu (0x1F600/0x4E), (2) HW CS dle bodu 10.
+
+### 12. Implementace Hardware CS, Chip ID Check a sestavení/bootování `gui46` (2026-11-12)
+- **Provedené změny v patchi 0953 (`xnu/patches/0953-willow-touch-nt36672a-spi-ft8719.patch`)**:
+  1. *Hardware Chip Select (GENI SPI)*:
+     - TLMM pin 9 nakonfigurován s `mux = 1` (`qup02`) namísto obyčejného GPIO (`mux = 0`).
+     - V inicializaci SPI `touch_se_init()` nastaven registr `0x24c` (`SE_SPI_DEMUX_OUTPUT_INV = 1` pro polaritu `spi-cs-high`), `0x250` (`SE_SPI_DEMUX_SEL = 0` pro CS0) a v registru `0x25c` (`SE_SPI_TRANS_CFG`) vynulován bit `CS_TOGGLE`, čímž hardware automaticky a synchronně s SCLK stahuje a uvolňuje CS.
+     - V `touch_spi_xfer()` odstraněno veškeré manuální přepínání GPIO a softwarové zpoždění `delay(2)`.
+  2. *Diagnostika a ověření čipu (Chip ID Check)*:
+     - Do funkce `touch_nvt_download_fw()` přidán po resetu bootloaderu cyklus s až 5 pokusy o čtení 6 bajtů ze stránky `0x1F600` reg `0x4E` a výpis `SWEET TOUCH: Novatek chip ID (try %d) = %02x %02x %02x %02x %02x %02x`. Při detekci platného ID (`0x0a` / `0x0b`) cyklus končí a pokračuje stahování firmwaru.
+  3. *Oprava formátu patche*:
+     - Hunk 8 opraven na `-709,13 +1033,14`, nástroj `patchlint` hlásí 0 poškozených patchů.
+- **Sestavení a bootování**:
+  - Zdrojový commit `6b2c23b` pushnut na `origin/main`.
+  - GitHub Actions CI běh `43253239753` úspěšně zkompiloval jádro za 7 min 19 s.
+  - Artefakt `xnu-kernel` stažen do `xnu/out/kernel.development.sweet.gui46`.
+  - Vygenerován `xnu/out/willow_fit.adt` (15 204 060 B), zabalen `xnu/out/payload-gui46.bin` (32 714 912 B) a bootovací obraz `shim/out/shim-evox-boot-gui46.img` (33 017 856 B / 32 244 KB, limit 32 348 KB splněn s rezervou 104 KB).
+  - Obraz úspěšně odeslán a spuštěn přes `fastboot boot` na zařízení `19126bfc`:
+    `Sending 'boot.img' (32244 KB) OKAY [0.869s]`
+    `Booting OKAY [0.174s]`.
+
