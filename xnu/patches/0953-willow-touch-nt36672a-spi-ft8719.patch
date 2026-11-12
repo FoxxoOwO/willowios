@@ -33,14 +33,14 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	int kind, irq_hint;
  	uint32_t irq_status, irq_last, active;
  	unsigned sent, got;
-@@ -552,6 +561,282 @@
+@@ -552,6 +561,285 @@
  	return 0;
  }
  
 +/*
-+ * willow: full-duplex GENI SPI transfer on QUP0 SE2 (spi@4a88000) with manual
-+ * CS on GPIO 9. DT specifies spi-cs-high, so CS is active HIGH:
-+ * Idle: CS=LOW (deasserted), Transfer: CS=HIGH (asserted), Done: CS=LOW.
++ * willow: full-duplex GENI SPI transfer on QUP0 SE2 (spi@4a88000) with HW CS on
++ * GPIO 9 (qup02 func 1). DEMUX_OUTPUT_INV=1 for spi-cs-high (active HIGH).
++ * The GENI SPI hardware engine automatically drives CS synchronously with SCLK.
 + */
 +static int
 +touch_spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned len)
@@ -51,9 +51,6 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
 +		return EBUSY;
 +	}
-+	/* CS asserted HIGH for the whole transaction (spi-cs-high). */
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, true);
-+	delay(2);
 +	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
 +	touch_wr(st.se, SE_TX_LEN, len);
 +	touch_wr(st.se, SE_RX_LEN, len);
@@ -80,16 +77,11 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		}
 +		if ((irq & SE_DONE) && got >= len) {
 +			touch_wr(st.se, SE_IRQ_CLR, irq);
-+			delay(2);
-+			/* CS deasserted LOW after the transaction. */
-+			touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
 +			return 0;
 +		}
 +		delay(1);
 +	}
 +	touch_abort();
-+	/* CS deasserted LOW on timeout as well. */
-+	touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
 +	return ETIMEDOUT;
 +}
 +
@@ -154,14 +146,25 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +	touch_nvt_spi_write(0x00, cmd_eng, 1);
 +	delay(20000);
 +
-+	/* 1. Bootloader reset sequence (GPIO 87 is unclaimed in willow DT; use SW reset) */
-+	touch_nvt_set_page(0x3f0fe);
-+	uint8_t cmd_rst[1] = { 0x69 };
-+	touch_nvt_spi_write(0x7e, cmd_rst, 1);
-+	delay(20000);
-+	touch_nvt_set_page(0x3f310);
-+	uint8_t cmd_stop[1] = { 0x00 };
-+	touch_nvt_spi_write(0x10, cmd_stop, 1);
++	/* 1. Bootloader reset sequence & chip ID check (vendor probe reads page 0x1F600 reg 0x4E) */
++	for (int retry = 0; retry < 5; retry++) {
++		touch_nvt_set_page(0x3f0fe);
++		uint8_t cmd_rst[1] = { 0x69 };
++		touch_nvt_spi_write(0x7e, cmd_rst, 1);
++		delay(10000);
++		touch_nvt_set_page(0x3f310);
++		uint8_t cmd_stop[1] = { 0x00 };
++		touch_nvt_spi_write(0x10, cmd_stop, 1);
++		touch_nvt_set_page(0x1f600);
++		uint8_t chip_id[8] = { 0 };
++		touch_nvt_spi_read(0x4e, chip_id, 6);
++		printf("SWEET TOUCH: Novatek chip ID (try %d) = %02x %02x %02x %02x %02x %02x\n",
++		    retry, chip_id[1], chip_id[2], chip_id[3], chip_id[4], chip_id[5], chip_id[6]);
++		if (chip_id[1] == 0x0au || chip_id[1] == 0x0bu) {
++			break;
++		}
++		delay(10000);
++	}
 +
 +	/* 3. Download sections into SRAM */
 +	for (uint32_t s = 0; s < num_sections; s++) {
@@ -331,7 +334,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  		return false;
  	}
  	if (touch_rd(st.se, SE_STATUS) & 0x1001u) {
-@@ -585,8 +872,17 @@
+@@ -585,8 +872,19 @@
  	touch_wr(st.se, 0x24, 0x7f);
  	touch_wr(st.se, 0x20, 1);
  	touch_wr(st.se, SE_CLK_SEL, 0);
@@ -342,7 +345,9 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_wr(st.se, 0x224, 0);                /* SE_SPI_CPHA = 0 */
 +		touch_wr(st.se, 0x22c, 0);                /* SE_SPI_LOOPBACK = 0 */
 +		touch_wr(st.se, 0x230, 0);                /* SE_SPI_CPOL = 0 */
++		touch_wr(st.se, 0x24c, 1);                /* SE_SPI_DEMUX_OUTPUT_INV = 1 (CS0 inverted: active HIGH for spi-cs-high) */
 +		touch_wr(st.se, 0x250, 0);                /* SE_SPI_DEMUX_SEL = CS0 */
++		touch_wr(st.se, 0x25c, touch_rd(st.se, 0x25c) & ~2u); /* SE_SPI_TRANS_CFG: clear CS_TOGGLE bit so HW drives CS automatically */
 +		touch_wr(st.se, 0x268, 4);                /* SE_SPI_WORD_LEN = 8-bit (8 - MIN_WORD_LEN=4) */
 +	} else {
 +		touch_wr(st.se, SE_MCLK, (2u << 4) | 1u);
@@ -368,8 +373,8 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +		touch_gpio(6, 1, 0, 3, false, false);                    /* SPI MISO, func qup02 (mux 1) */
 +		touch_gpio(7, 1, 0, 3, true, false);                     /* SPI MOSI, func qup02 (mux 1) */
 +		touch_gpio(8, 1, 0, 3, true, false);                     /* SPI SCLK, func qup02 (mux 1) */
-+		/* CS idle LOW (deasserted, DT has spi-cs-high: active HIGH). */
-+		touch_gpio(WILLOW_PIN_CS, 0, 3, 3, true, false);
++		/* CS0 hardware chip select (func qup02, mux 1, driven by GENI SPI engine). */
++		touch_gpio(WILLOW_PIN_CS, 1, 0, 3, true, false);
 +		DTEntry chosen;
 +		void const *fw_prop = NULL;
 +		unsigned int fw_size = 0;
@@ -398,7 +403,7 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  	unsigned errors = 0, ticks = 0, polls = 0;
  	while (!st.dead) {
  		if (st.diag == 2 && ++polls == 3000) {  /* ~30 s at 10 ms */
-@@ -709,12 +1033,13 @@
+@@ -709,13 +1033,14 @@
  		}
  		/* Optional IRQ hint still reads every 100ms, and always while down. */
  		if (!st.irq_hint || st.active ||
