@@ -1888,3 +1888,11 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
 - **Rozdíl**: oba porty (a Linux recovery spi_geni_prepare_transfer_hardware) používají **HW chip select**: všechny 4 piny (MISO/MOSI/CLK/CS) mux na funkci qupXX, SE_SPI_DEMUX_SEL(0x250)=0, SE_SPI_TRANS_CFG(0x25c) bez CS_TOGGLE (bit1), a pro spi-cs-high se zapisuje SE_SPI_DEMUX_OUTPUT_INV(0x24c) = 1<<cs. My CS (GPIO 9) togglujeme ručně jako GPIO a 0x24c nepíšeme.
 - Návrh gui46 (neprovedeno): pin 9 -> mux 1 (qup02), 0x250=0, 0x24c=1, 0x25c &= ~2, v 	ouch_spi_xfer zrušit ruční CS.
 - Staženo do scratch/unixnu/ (nepatří do gitu).
+
+### 11. Vendor zdroj MiCode/Xiaomi_Kernel_OpenSource, větev `willow-p-oss` (2026-11-12)
+- Přímo náš telefon: `drivers/input/touchscreen/nt36xxx_spi_bbb/` (stažené do scratch/mikernel/, mimo git). Je to ovladač, který jsme dosud rekonstruovali z recovery binárky.
+- Potvrzeno: NT36672A mem map (EVENT_BUF 0x21C00, ILM/DLM_DES/LEN/CRC adresy 0x3F1xx) shodná s našimi; `NVT_TOUCH_SUPPORT_HW_RST = 0` (reset GPIO se nepoužívá, náš NOP GPIO 87 je správně); čtení = TX len+1 (DUMMY_BYTES), data od rbuf[2] (shodné s naším touch_nvt_spi_read); SPI mode 0, 8 bit.
+- **Chybí u nás**: vendor probe po eng_reset a bootloader_reset vždy čte ID čipu (page 0x1F600, reg 0x4E, 7 bajtů, 5 pokusů) a teprve pak stahuje FW. My čtení nikdy neověřujeme, takže nevíme, zda RX cesta SPI vůbec funguje (reset state 0x00 může být jen špatné čtení).
+- NT36672A je TDDI: TP reset = LCD reset (`set_lcd_reset_gpio_keep_high`); LCD RESX se nesmí shodit.
+- FW je per panel (novatek_ts_fw.bin / tianma / ebbg); panel na willow je shenchao (viz dmesg dsi_nt36672a_shenchao). Ověřit, že novatek_fw_packed.bin je pro tento panel.
+- Další krok gui46: (1) po bootloader_reset přečíst a vypsat ID čipu (0x1F600/0x4E), (2) HW CS dle bodu 10.
