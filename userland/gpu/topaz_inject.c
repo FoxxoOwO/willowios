@@ -20,6 +20,7 @@
 #include <sys/ucontext.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
+#include <dispatch/dispatch.h>
 #include <pthread.h>
 #include <mach/mach.h>
 #include <stdbool.h>
@@ -316,16 +317,68 @@ sb_snapshot_output_format(__unused id self, __unused SEL _cmd, __unused id snaps
 	return 0;
 }
 
+static BOOL
+sb_poster_switcher_allowed(__unused id self, __unused SEL _cmd, id *explanation)
+{
+	if (explanation != NULL) {
+		*explanation = (id)CFSTR("the poster switcher is disabled on willow");
+	}
+	return NO;
+}
+
+static void
+sb_noop(__unused id self, __unused SEL _cmd)
+{
+}
+
+static volatile int sb_is_unlocked = 0;
+
+static void
+sb_try_unlock_main(__unused void *ctx)
+{
+	if (sb_is_unlocked) {
+		return;
+	}
+	Class lsm = objc_getClass("SBLockScreenManager");
+	if (!lsm) {
+		return;
+	}
+	id mgr = ((id (*)(id, SEL))objc_msgSend)((id)lsm, sel_registerName("sharedInstanceIfExists"));
+	if (!mgr) {
+		mgr = ((id (*)(id, SEL))objc_msgSend)((id)lsm, sel_registerName("sharedInstance"));
+	}
+	if (!mgr) {
+		return;
+	}
+	SEL locked_sel = sel_registerName("isUILocked");
+	if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), locked_sel)) {
+		BOOL locked = ((BOOL (*)(id, SEL))objc_msgSend)(mgr, locked_sel);
+		if (!locked) {
+			sb_is_unlocked = 1;
+			log_console("topaz-inject: SpringBoard UI is unlocked!\n");
+			return;
+		}
+	}
+	SEL sel = sel_registerName("unlockUIFromSource:withOptions:");
+	if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), sel)) {
+		BOOL done = ((BOOL (*)(id, SEL, long, id))objc_msgSend)(mgr, sel, 24, nil);
+		if (!done) {
+			done = ((BOOL (*)(id, SEL, long, id))objc_msgSend)(mgr, sel, 17, nil);
+		}
+		log_console(done ? "topaz-inject: main-thread unlockUIFromSource succeeded\n"
+		                 : "topaz-inject: main-thread unlockUIFromSource pending (CoverSheet not ready)\n");
+	}
+}
+
 static void *
 sb_unlock_worker(void *arg)
 {
 	(void)arg;
-	/* Wait 12 seconds for SpringBoard to complete UIApplicationMain and present CoverSheet.
-	 * Crucial: Do NOT call [UIApplication sharedApplication] here! In SpringBoard, calling
-	 * sharedApplication before UIApplicationMain triggers an assertion failure in
-	 * +[SBLockScreenManager _sharedInstanceCreateIfNeeded:]. Instead, check the global
-	 * UIApp pointer exported by UIKitCore, which is a pure pointer read without side-effects. */
-	sleep(12);
+	/* Wait 10 seconds for SpringBoard to complete UIApplicationMain and present CoverSheet.
+	 * Crucial: Do NOT call [UIApplication sharedApplication] or SBLockScreenManager off the
+	 * main thread! Check the global UIApp pointer, then dispatch unlock checks onto
+	 * dispatch_get_main_queue() until isUILocked becomes NO. */
+	sleep(10);
 	id **pUIApp = (id **)dlsym(RTLD_DEFAULT, "UIApp");
 	for (int wait = 0; wait < 30; wait++) {
 		if (pUIApp && *pUIApp != NULL) {
@@ -334,28 +387,10 @@ sb_unlock_worker(void *arg)
 		}
 		sleep(1);
 	}
-	/* Wait 3 seconds for CoverSheet / Lock Screen UI to present */
 	sleep(3);
-	for (int retry = 0; retry < 10; retry++) {
-		Class lsm = objc_getClass("SBLockScreenManager");
-		if (lsm) {
-			id mgr = ((id (*)(id, SEL))objc_msgSend)(lsm, sel_registerName("sharedInstance"));
-			if (mgr) {
-				SEL sel = sel_registerName("unlockUIFromSource:withOptions:");
-				if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), sel)) {
-					((void (*)(id, SEL, int, id))objc_msgSend)(mgr, sel, 17, nil);
-					log_console("topaz-inject: SpringBoard unlocked via unlockUIFromSource:17\n");
-					break;
-				}
-				SEL sel2 = sel_registerName("attemptUnlockWithPasscode:finishUIUnlock:completion:");
-				if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), sel2)) {
-					((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(mgr, sel2, nil, YES, nil);
-					log_console("topaz-inject: SpringBoard unlocked via attemptUnlockWithPasscode\n");
-					break;
-				}
-			}
-		}
-		sleep(2);
+	for (int retry = 0; retry < 15 && !sb_is_unlocked; retry++) {
+		dispatch_async_f(dispatch_get_main_queue(), NULL, sb_try_unlock_main);
+		sleep(3);
 	}
 	return NULL;
 }
@@ -365,6 +400,12 @@ springboard_fixes(void)
 {
 	pthread_t t;
 	pthread_create(&t, NULL, sb_unlock_worker, NULL);
+	io_service_t gpu = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("RedwoodGPU"));
+	if (gpu != 0) {
+		IOObjectRelease(gpu);
+	} else {
+		CFPreferencesSetAppValue(CFSTR("BSUIVibrancyEffectViewDisabled"), kCFBooleanTrue, kCFPreferencesCurrentApplication);
+	}
 	Class c1 = objc_getClass("SBLockdownManager");
 	Method m1 = c1 ? class_getInstanceMethod(c1, sel_registerName("_setupActivationState")) : NULL;
 	if (m1 != NULL) {
@@ -385,7 +426,17 @@ springboard_fixes(void)
 	if (m4 != NULL) {
 		method_setImplementation(m4, (IMP)sb_snapshot_output_format);
 	}
-	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding)\n");
+	Class c5 = objc_getClass("SBMainDisplayPolicyAggregator");
+	Method m5 = c5 ? class_getInstanceMethod(c5, sel_registerName("_allowsCapabilityPosterSwitcherWithExplanation:")) : NULL;
+	if (m5 != NULL) {
+		method_setImplementation(m5, (IMP)sb_poster_switcher_allowed);
+	}
+	Class c6 = objc_getClass("SBAppSwitcherPageView");
+	Method m6 = c6 ? class_getInstanceMethod(c6, sel_registerName("_createOrDestroyWallpaperOverlayView")) : NULL;
+	if (m6 != NULL) {
+		method_setImplementation(m6, (IMP)sb_noop);
+	}
+	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding + poster_switcher)\n");
 }
 
 __attribute__((constructor))
@@ -402,8 +453,8 @@ topaz_inject(void)
 		container_manager_fixes();
 		return;
 	}
-	if (name != NULL && strncmp(name, "CollectionsPoste", 16) == 0) {
-		log_console("topaz-inject: neutralized CollectionsPoster (sleeping)\n");
+	if (name != NULL && (strncmp(name, "CollectionsPoste", 16) == 0 || strncmp(name, "AegirPoster", 11) == 0)) {
+		log_console("topaz-inject: neutralized poster extension (sleeping)\n");
 		while (1) { usleep(100000); }
 		return;
 	}
