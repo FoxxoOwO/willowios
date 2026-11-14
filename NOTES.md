@@ -2009,3 +2009,21 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
      - Zabalen `xnu/out/willow_fit.adt` (15 276 252 B), `xnu/out/payload-gui50.bin` (32 757 328 B, `--cmdline` 557 B se zapnutým `modem=1 wifi=1 usb=1` a `*app`) a `shim/out/shim-evox-boot-gui50.img` (33 058 816 B / 32 284 KB).
      - Obraz nabootován přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui50.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
 
+
+### 17. Analýza záseku `gui50` (černá obrazovka + čárka) a opravy v `gui51` (2026-11-14)
+- **Zjištění z logu `scratch/sweet-log-gui50.txt` (4 726 řádků)**:
+  1. *TopazModem + WCN3990 Wi-Fi plně naběhly*: `MODEM READY` -> `WLFW service 0x45 up` -> `WLAN FIRMWARE READY` -> `WLAN ON (mission mode)` -> `HTC READY` -> `WMI READY` -> `en0 and the station are up for iOS` a WCN3990 úspěšně naskenovala 22–25 reálných 2.4 GHz a 5 GHz Wi-Fi sítí.
+  2. *Příčina zamrznutí na černé obrazovce s čárkou (`TopazGPU: no answer` na snímku 34)*:
+     - Ve funkci `willow_wifi_power_on()` v `xnu/patches/0963-willow-modem-wifi-sm6125.patch` bylo pro PM6125 LDOA8 (`vdd-cx-mx`) zapsáno `min_uV = 640000` (640 mV) namísto `max_uV = 900000` (900 mV). Snížení společné větve `vdd-cx-mx` na 640 mV způsobilo při taktu GPU 600 MHz na přechodovém shaderu snímku 34 (při swipu ze spodu nahoru) vytuhnutí Adreno 610 (`TopazGPU: no answer: fence 84 done 59 rptr 1046 wptr 2111`) a následné chyby Mesa (`submit failed: -60`).
+  3. *Příčina rozbitého layoutu SpringBoardu, úbytku GPU rezervy a neodemčeného CoverSheetu*:
+     - Volání `ci_context_fixes()` uvnitř `springboard_fixes()` v `userland/gpu/topaz_inject.c` rozbilo `UICollectionViewFlowLayout` a ikony na ploše `SpringBoard` (v `gui49` bez něj běžely čistě).
+     - Použití `*app` v `topaz_inject=` se chytalo i na všechny `.appex` widgety (`PosterBoard`, `SleepWidgetExtension`, `Spotlight`, ...), což před `sweet_res_fill()` sebralo paměť a zmenšilo 12MB rezervu pro `SweetSurface` z 10 na 7 bufferů.
+     - `sb_unlock_worker()` skončil předčasně v `t = 13 s` před prvním snímkem `SpringBoard`, takže CoverSheet zůstal prezentovaný.
+  4. *Chybějící `SweetKeyStore.cpp` hunk pro selektor `8` (`kAKSLockDevice`)* v `xnu/patches/0962-willow-adreno-fw-aks.patch`.
+- **Provedené opravy v `gui51` (commit `90468b4`)**:
+  1. `xnu/patches/0963-willow-modem-wifi-sm6125.patch`: `vdd-cx-mx` (`ldoa8`) zvýšeno na `900000` uV (900 mV).
+  2. `xnu/patches/0962-willow-adreno-fw-aks.patch`: doplněn `kAKSLockDevice = 8` do `SweetKeyStore.cpp`.
+  3. `userland/gpu/topaz_inject.c`: `ci_context_fixes()` ponecháno jen v `uikit_app_fixes()` (odebráno ze `springboard_fixes()`); `sb_unlock_worker()` a `sb_try_unlock_main()` opakují odemykání každé 2 s (až 120 s) a aktivně zavírají `SBCoverSheetPresentationManager` (`setCoverSheetPresented:NO animated:NO withCompletion:nil`).
+  4. CI sestavení: `gpu.yml` běh `43582130718` (`libtopaz-inject.dylib` 71 872 B) a `xnu.yml` běh `43582133478` (`kernel.development.sweet` 17 496 440 B).
+  5. Zabaleno s explicitním seznamem aplikací v `topaz_inject=` (bez `*app`, aby se neinjektovaly widgetové extenze): `xnu/out/willow_fit_gui51.adt` (15 276 220 B), `xnu/out/payload-gui51.bin` (32 757 296 B) a `shim/out/shim-evox-boot-gui51.img` (33 058 816 B / 32 284 KB).
+  6. Zařízení `19126bfc` restartováno z recovery do bootloaderu a nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui51.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
