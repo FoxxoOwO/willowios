@@ -1992,10 +1992,20 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
 - **MILNÍK POTVRZEN UŽIVATELEM (2026-11-14, `gui49`)**:
   - **iOS 16.7.16 plně nabootoval do odemčeného systému (SpringBoard Home Screen) bez překryvu konzole, s hardwarovou akcelerací Adreno 610 a plně funkčním dotykovým ovládáním Novatek NT36672A SPI!**
 
-
-
-
-
-
-
+### 16. Oprava pádů aplikací (`Preferences` / `CoreImage`) a port `TopazModem` / WCN3990 Wi-Fi v `gui50` (2026-11-14)
+- **Zjištění z logu `sweet-log-gui49.txt` (pád `Preferences` a `MobileSlideShow`)**:
+  1. `Preferences[236]` padalo s `EXC_BAD_ACCESS` na `pc = 0x0, lr = 0x1a942c58c` (unslid `0x194b3458c` v `CoreImage`), volané z `MobileIcons` (`LICreateDefaultIcon` -> `CIContext`) při vykreslování ikon v tabulce Nastavení. Disassembly `-[CIContext initWithOptions:]` (`0x19499ef1c`) v dyld shared cache potvrdila, že na arm64 iOS 16 neexistuje CPU fallback renderer v `CoreImage`, ale když `+[CIContext internalGLContextWithOptions:]` a `+[CIContext internalContextWithEAGLContext:options:]` vrátí `nil`, `-[CIContext initWithOptions:]` čistě vrátí `nil` (`0x19499f118: cbz x0, #0x19499f17c`) a `MobileIcons` bezpečně přeskočí `CIContext` bez pádu.
+  2. `MobileSlideShow` a další UIKit aplikace neměly injektovanou `libtopaz-inject.dylib` (chybělo `*app` v `topaz_inject=`), takže na ně neplatily UIKit hooky (`_UIScreenComplexBoundingPathUtilities`, `XBApplicationSnapshotManifestImpl`).
+- **Provedené úpravy v `gui50` (commit `076ef71`)**:
+  1. *Oprava pádů aplikací v `userland/gpu/topaz_inject.c` (CI běh `gpu.yml` `43578766718`)*:
+     - Přidána funkce `ci_context_fixes()` hookující `internalGLContextWithOptions:`, `internalContextWithEAGLContext:options:`, `contextWithEAGLContext:` a `contextWithEAGLContext:options:` na `CIContext` (-> `nil`) pro `SpringBoard` a všechny klientské aplikace.
+     - Přidána větev `uikit_app_fixes(name)` pro všechny aplikace (`*app` v `topaz_inject=`), která aplikuje UIKit hooky, `ci_context_fixes()` a loguje symbolikované crashe i nezachycené ObjC výjimky (`NSSetUncaughtExceptionHandler`) přímo do `/dev/console`.
+  2. *Port `TopazModem` + WCN3990 Wi-Fi pro `willow` (`SM6125`) v `xnu/patches/0963-willow-modem-wifi-sm6125.patch` (CI běh `xnu.yml` `43578794415`)*:
+     - `MODEM_POOL_BASE` přesunut z `0xE0000000` (uvnitř XNU RAM na `willow`) na `0x7C000000` (`16 MB` nad Adreno GPU poolem v čisté nízké DDR).
+     - Výchozí `fw_part` změněn z `"modem_a"` na `"modem"` a statické tabulky `fw_files[]` / `fw_ext[]` / `fw_all[]` z `topaz` nahrazeny běhovým FAT16 čtenářem přímo nad `/dev/block/by-name/modem` (včetně automatického přesměrování `image/bdwlan.bin` -> `image/bdf_c3x.bin` dle `/vendor/etc/init/hw/init.target.rc` pro `willow` SKU `c3x`).
+     - Upraveno okno PIL carveoutu modemu na `0x4B000000 + 0x07E00000` (`modem_region@4b000000`), `WLFW_MSA_BASE` na `0x53300000` (`wlan_msa_region@53300000`), SMMU stream ID `WLAN_SID` na `0x80` (`soc/qcom,icnss@C800000` `iommus = <0x63 0x80 0x1>`) a `rmtfs` `scm_assign` na 2 VMID (`VMID_HLOS`, `VMID_MSS_MSA`).
+     - Přidána funkce `willow_wifi_power_on()` zapínající přes `topaz_rpm_write` 4 napájecí větve WCN3990 na PM6125 (`ldoa8` `640 mV`, `ldoa16` `1.8 V`, `ldoa17` `1.304 V`, `ldoa23` `3.3 V`) a referenční hodiny `BB_CLK2` (`clka` id `2`, `19.2 MHz`, `pccb = 1`).
+  3. *Sestavení a nabootování `gui50`*:
+     - Zabalen `xnu/out/willow_fit.adt` (15 276 252 B), `xnu/out/payload-gui50.bin` (32 757 328 B, `--cmdline` 557 B se zapnutým `modem=1 wifi=1 usb=1` a `*app`) a `shim/out/shim-evox-boot-gui50.img` (33 058 816 B / 32 284 KB).
+     - Obraz nabootován přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui50.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
 
