@@ -1930,4 +1930,41 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
     `Sending 'boot.img' (32244 KB) OKAY [0.870s]`
     `Booting OKAY [0.176s]`.
 
+### 14. Průlom s dotykem v `gui47` a příprava oprav pro GUI (gui48, 2026-11-14)
+- **Zjištění z logu `sweet-log-gui47.txt` a fotografie displeje**:
+  1. *PLNĚ FUNKČNÍ DOTYK*:
+     - Sběrnice QUP0 SE2 (`spi@4a88000`) a čip Shenchao NT36672A detekován na první pokus s polaritou Active-LOW (`inv = 0`):
+       `SWEET TOUCH: Novatek chip ID (inv=0 try 0) = 0a 00 00 72 66 03`
+       `SWEET TOUCH: Novatek chip detected with CS inv=0!`
+       `SWEET TOUCH: Novatek firmware booted OK (reset state=0xa1, poll 0)`
+     - Reálné multi-touch souřadnice úspěšně předávány do IOHIDEvent:
+       `SWEET HID: touch 0 up at 713,884`
+       `SWEET HID: touch 0 down at 78,269`
+  2. *Fyzická tlačítka fungují*:
+     - Power button generuje kód `0x30`, Volume Down `0xe9`:
+       `SWEET KEYS: key=0 down=1 ... SWEET HID: key 0x30 down (1 clients)`
+     - `backboardd` reaguje: uspává a probouzí panel přes DSI DCS 0x28 / 0x29 (přepínání mezi černou obrazovkou a displejem).
+  3. *Proč přetrvával text konzole*:
+     - V `AppleCLCD::present` maska snímku obsahovala 3 vrstvy (`0x80000007`), takže `directPresent` vrátil `false` a šlo se do multi-layer copy path.
+     - V copy path chybělo ztišení konzole (`sweet_console_muted = 1`), takže text konzole se nadále vykresloval.
+     - Navíc v patchi 0960 byl kód pro selector 12 umístěn do větve `default:` namísto `case kSweetFBRequestPowerChange:`, kam se požadavek na display-on nikdy nedostal.
+  4. *Proč SpringBoard cyklí v respringu (spinner + home bar)*:
+     - Po startu (`topaz-inject: UIApp instance is live`) SpringBoard hledá IOKit službu `AppleCredentialManager`.
+     - Vracelo se `none`, což vedlo k chybě `LibCall_ACMContextCreate: returning, err = -5` a volání `abort()` (CRASH SpringBoard sig 6).
+- **Provedené opravy pro `gui48` (commit `6e29c35`)**:
+  1. *Patch 0960 (`0960-willow-console-mute-at-swap.patch`)*:
+     - Přidáno ztišení konzole (`sweet_console_muted = 1`) přímo do `AppleCLCD::present` pro jakýkoliv první snímek (direct i copy path).
+     - Při prvním snímku je vyčištěn boot framebuffer `fPixels` (`bzero`), aby se odstranil starý boot text.
+     - Přidáno ztišení konzole i do `case kSweetFBRequestPowerChange:` při zapnutí panelu (`!off`).
+  2. *Patch 0961 (`0961-willow-applecredentialmanager.patch`)*:
+     - Vytvořen stub IOKit driver `AppleCredentialManager` a `AppleCredentialManagerUserClient` registrovaný pod `IOResources`.
+     - Metody vracejí `kIOReturnSuccess` (0), čímž se odblokuje `LibCall_ACMContextCreate` a zabrání pádu SpringBoardu.
+  3. *Sestavení artefaktů `gui48`*:
+     - GitHub Actions CI běh `43566734258` úspěšně zkompiloval jádro za 6 min 33 s.
+     - Jádro staženo do `xnu/out/kernel.development.sweet.gui48` (17 550 688 B).
+     - Sestaven `xnu/out/payload-gui48.bin` (32 739 376 B).
+     - Zabalen výsledný boot image `shim/out/shim-evox-boot-gui48.img` (33 042 432 B / 32 268 KB, fastboot limit 32 348 KB splněn s rezervou 80 KB).
+
+
+
 
