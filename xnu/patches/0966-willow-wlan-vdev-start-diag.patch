@@ -1,0 +1,35 @@
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -4217,7 +4217,7 @@ scan_start(void)
+ 	p = wmi_put_tlv(p, TAG_ARRAY_STRUCT, NFREQ * (4 + 24));
+ 	for (uint32_t i = 0; i < NFREQ; i++) {
+ 		uint32_t mode = scan_freqs[i] < 4000 ? 1 : 0;
+-		uint32_t flags = mode | (1u << 7) | (1u << 11) | (scan_freqs[i] < 4000 ? 0 : (1u << 12));
++		uint32_t flags = mode | (1u << 11) | (scan_freqs[i] < 4000 ? 0 : (1u << 12));
+ 		c = wmi_put_tlv(p, TAG_CHANNEL, 24);
+ 		c = put32(c, scan_freqs[i]);
+ 		c = put32(c, scan_freqs[i]);
+@@ -4979,10 +4979,11 @@ static uint8_t *
+ w_channel(uint8_t *p, uint32_t freq)
+ {
+ 	uint8_t *c = wmi_put_tlv(p, TAG_CHANNEL, 24);
++	uint32_t mode = freq < 4000 ? 1 : 0;
+ 	c = w_p32(c, freq);
+ 	c = w_p32(c, freq);
+ 	c = w_p32(c, 0);
+-	c = w_p32(c, freq < 4000 ? 1 : 0);
++	c = w_p32(c, mode | (1u << 11) | (freq < 4000 ? 0 : (1u << 12)));
+ 	c = w_p32(c, (40u << 8) | (40u << 16));
+ 	return w_p32(c, 40u << 8);
+ }
+@@ -5606,6 +5607,9 @@ w_join_event(uint32_t id, const uint8_t *t, uint32_t len)
+ 	if (id == 0x5001 && l >= 16) {             /* VDEV_START_RESP {vdev, req, type, status} */
+ 		s_start_status = (int32_t)v[3];
+ 		s_start_resp = true;
++		if (s_start_status != 0) {
++			LOG("t=%u ms: join: VDEV_START_RESP vdev=%u req=%u type=%u status=%d", g_ms, v[0], v[1], v[2], s_start_status);
++		}
+ 	} else if (id == 0x6001 && s_state == S_UP) {   /* PEER_STA_KICKOUT */
+ 		LOG("t=%u ms: join: peer kickout", g_ms);
+ 		w_teardown();
