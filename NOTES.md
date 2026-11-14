@@ -1965,6 +1965,33 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
      - Sestaven `xnu/out/payload-gui48.bin` (32 739 376 B).
      - Zabalen výsledný boot image `shim/out/shim-evox-boot-gui48.img` (33 042 432 B / 32 268 KB, fastboot limit 32 348 KB splněn s rezervou 80 KB).
 
+### 15. Analýza logu `gui48` (černá obrazovka + Home bar) a opravy v `gui49` (2026-11-14)
+- **Potvrzeno v logu `sweet-log-gui48.txt` (5 783 řádků)**:
+  1. *Konzole ztišena a vymazána*: Při `present #1` (řádek 1222) byla boot konzole vymazána a ztišena (`muted 1`), takže text konzole již nepřekrývá iOS grafiku.
+  2. *`AppleCredentialManager` funguje*: `SpringBoard` i `coreauthd` úspěšně otevřely `AppleCredentialManager` (`open AppleCredentialManager type 0 -> 0x0`), pád na `LibCall_ACMContextCreate: err = -5` z `gui47` zcela zmizel a `SpringBoard[187]` běžel stabilně celých 8 minut (`500` snímků).
+  3. *Dotyk i fyzická tlačítka fungují*: Po celou dobu běhu přicházely přesné multi-touch události z NT36672A SPI.
+- **Příčiny stavu „Černá obrazovka a čárka“ (Home bar) v `gui48`**:
+  1. *Adreno 610 GPU nenaběhlo (`TopazGPU: THE GPU IS NOT STARTED`) kvůli chybějícímu zdrojovému patchi pro `TopazAdrenoFw.cpp`*:
+     - V `gui12`..`gui40` byl `a610_zap.mdt` (podepsaný pro Willow SM6125) a `a630_sqe.fw` (31 980 B) vložen pouze binárním přepisem do `xnu/out/kernel.development.sweet`, nikoliv jako patch v `xnu/patches/`.
+     - Při čistém CI sestavení `gui46`..`gui48` tak `TopazAdrenoFw.cpp` obsahoval podpis z Topaz (SM6225), který TrustZone na Willow odmítl (`TopazGPU: zap init_image: ffcfffbb/0` -> `THE GPU IS NOT STARTED`).
+     - Bez služby `RedwoodGPU` přešel `backboardd` na CPU rasterizér `softpipe` (~1,5–4,2 s/snímek).
+  2. *Volání `unlockUIFromSource:` z vedlejšího pthreadu a iOS 16 Poster Switcher*:
+     - V `userland/gpu/topaz_inject.c` volalo vlákno `sb_unlock_worker` metodu `[SBLockScreenManager unlockUIFromSource:17 withOptions:nil]` přímo ze surového `pthread` mimo hlavní vlákno (`dispatch_get_main_queue()`), což při prvním startu `SpringBoard[26]` vyvolalo assertion crash v LockScreenu a při druhém startu `SpringBoard[187]` proběhlo jen jednou před dokončením prezentace CoverSheetu (`Unbalanced calls to begin/end appearance transitions for <SBCoverSheetPrimarySlidingViewController>`), takže telefon zůstal zamčený.
+     - Dotyk na pomalém Lock Screenu byl vyhodnocen jako dlouhý stisk a otevřel iOS 16 **Poster Switcher** (`PosterBoard` / `AegirPoster`), jehož `CALayerHost` vykresluje nad černým pozadím pouze bílou spodní čárku (Home bar), přičemž proces `AegirPoster` opakovaně padal (`sig 6`).
+- **Provedené opravy v `gui49` (commit `2c38a4f`)**:
+  1. *Patch 0962 (`xnu/patches/0962-willow-adreno-fw-aks.patch`)*:
+     - Trvale vkládá podepsaný Willow `firmware/willow/a610_zap.mdt` (6 860 B) a `firmware/willow/a630_sqe.fw` (31 980 B) přímo do `iokit/Kernel/arm/TopazAdrenoFw.cpp`.
+     - Doplňuje selektory `8` (`kAKSLockDevice`) a `35` do `iokit/Kernel/arm/SweetKeyStore.cpp`.
+  2. *Oprava `userland/gpu/topaz_inject.c` (CI běh `gpu.yml` `43571740041`)*:
+     - `sb_unlock_worker` nyní posílá odemykací pokusy výhradně na hlavní vlákno (`dispatch_async_f(dispatch_get_main_queue(), NULL, sb_try_unlock_main)`), kontroluje `[mgr isUILocked]` a opakuje `unlockUIFromSource:24` (a `17`) každé 3 s, dokud se Lock Screen skutečně neodemkne.
+     - Přidán hook `-[SBMainDisplayPolicyAggregator _allowsCapabilityPosterSwitcherWithExplanation:] -> NO`, který zakazuje černý Poster Switcher při dlouhém stisku na Lock Screenu, a neutralizován `AegirPoster`.
+  3. *Sestavení a nabootování `gui49`*:
+     - GitHub Actions CI běh `xnu.yml` `43571740073` úspěšně zkompiloval jádro za 5 min 58 s (`xnu/out/kernel.development.sweet.gui49`, 17 550 688 B).
+     - Zabalen `scratch/blobs_fit.bin` (15 131 312 B), `xnu/out/willow_fit.adt` (15 223 612 B), `xnu/out/payload-gui49.bin` (32 758 928 B) a `shim/out/shim-evox-boot-gui49.img` (33 058 816 B / 32 284 KB, pod limitem 32 348 KB).
+     - Zařízení `19126bfc` restartováno z recovery do fastbootu a nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui49.img`.
+
+
+
 
 
 
