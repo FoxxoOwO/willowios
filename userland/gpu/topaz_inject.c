@@ -146,17 +146,24 @@ gl_hooks(void *lib)
 	    orig_function_supported ? "on" : "OFF", orig_function_uniform ? "on" : "OFF");
 }
 
-/* Where a crash happened, printed to stderr (the console): image + offset + symbol. */
+/* Where a crash happened, printed to stderr and /dev/console: image + offset + symbol. */
 static void
-topaz_where(const char *what, void *addr)
+topaz_where(FILE *con, const char *what, void *addr)
 {
 	Dl_info info;
 
 	if (dladdr(addr, &info) && info.dli_fname != NULL) {
 		fprintf(stderr, "topaz-crash: %s %p = %s+0x%lx (%s)\n", what, addr, info.dli_fname,
 		    (unsigned long)((char *)addr - (char *)info.dli_fbase), info.dli_sname ? info.dli_sname : "?");
+		if (con != NULL) {
+			fprintf(con, "topaz-crash[%s]: %s %p = %s+0x%lx (%s)\n", getprogname(), what, addr, info.dli_fname,
+			    (unsigned long)((char *)addr - (char *)info.dli_fbase), info.dli_sname ? info.dli_sname : "?");
+		}
 	} else {
 		fprintf(stderr, "topaz-crash: %s %p (no image)\n", what, addr);
+		if (con != NULL) {
+			fprintf(con, "topaz-crash[%s]: %s %p (no image)\n", getprogname(), what, addr);
+		}
 	}
 }
 
@@ -166,18 +173,44 @@ topaz_crash(int sig, siginfo_t *si, void *uc_)
 	ucontext_t *uc = (ucontext_t *)uc_;
 	void *frames[16];
 	int n;
+	FILE *con = fopen("/dev/console", "w");
 
 	fprintf(stderr, "topaz-crash: signal %d at address %p\n", sig, si ? si->si_addr : NULL);
+	if (con != NULL) {
+		fprintf(con, "topaz-crash[%s]: signal %d at address %p\n", getprogname(), sig, si ? si->si_addr : NULL);
+	}
 	if (uc != NULL && uc->uc_mcontext != NULL) {
-		topaz_where("pc", (void *)uc->uc_mcontext->__ss.__pc);
-		topaz_where("lr", (void *)uc->uc_mcontext->__ss.__lr);
+		topaz_where(con, "pc", (void *)uc->uc_mcontext->__ss.__pc);
+		topaz_where(con, "lr", (void *)uc->uc_mcontext->__ss.__lr);
 	}
 	n = backtrace(frames, 16);
 	for (int i = 0; i < n; i++) {
-		topaz_where("bt", frames[i]);
+		topaz_where(con, "bt", frames[i]);
+	}
+	if (con != NULL) {
+		fclose(con);
 	}
 	signal(sig, SIG_DFL);
 	raise(sig);
+}
+
+static void
+topaz_uncaught_exception(id exc)
+{
+	FILE *con = fopen("/dev/console", "w");
+	if (con == NULL || exc == nil) {
+		return;
+	}
+	id name = ((id (*)(id, SEL))objc_msgSend)(exc, sel_registerName("name"));
+	id reason = ((id (*)(id, SEL))objc_msgSend)(exc, sel_registerName("reason"));
+	id symbols = ((id (*)(id, SEL))objc_msgSend)(exc, sel_registerName("callStackSymbols"));
+	const char *ns = name ? ((const char *(*)(id, SEL))objc_msgSend)(name, sel_registerName("UTF8String")) : "?";
+	const char *rs = reason ? ((const char *(*)(id, SEL))objc_msgSend)(reason, sel_registerName("UTF8String")) : "?";
+	const char *ss = symbols ? ((const char *(*)(id, SEL))objc_msgSend)(
+	    ((id (*)(id, SEL))objc_msgSend)(symbols, sel_registerName("description")),
+	    sel_registerName("UTF8String")) : "?";
+	fprintf(con, "topaz-exc[%s]: %s: %s\n%s\n", getprogname(), ns ? ns : "?", rs ? rs : "?", ss ? ss : "?");
+	fclose(con);
 }
 
 static void
@@ -191,6 +224,10 @@ topaz_crash_handlers(void)
 	sa.sa_flags = SA_SIGINFO;
 	for (unsigned i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++) {
 		sigaction(sigs[i], &sa, NULL);
+	}
+	void (*set_eh)(void (*)(id)) = (void (*)(void (*)(id)))dlsym(RTLD_DEFAULT, "NSSetUncaughtExceptionHandler");
+	if (set_eh != NULL) {
+		set_eh(topaz_uncaught_exception);
 	}
 }
 
@@ -395,10 +432,66 @@ sb_unlock_worker(void *arg)
 	return NULL;
 }
 
+static id
+ret_nil(__unused id self, __unused SEL _cmd)
+{
+	return nil;
+}
+
+static void
+ci_context_fixes(void)
+{
+	/*
+	 * In processes without libtopaz-gl.dylib (SpringBoard and all UIKit apps),
+	 * [[EAGLContext alloc] initWithAPI:...] returns nil, and CoreImage's CI::GLContext
+	 * constructor does not null-check EAGLContext before calling glDisable (0x0).
+	 * Returning nil from +[CIContext internalGLContextWithOptions:] and
+	 * +[CIContext internalContextWithEAGLContext:options:] makes -[CIContext initWithOptions:]
+	 * return nil cleanly so MobileIcons / CoreUI fall back to CPU CGBitmapContext rendering.
+	 */
+	Class c = objc_getClass("CIContext");
+	if (c != NULL) {
+		const char *sels[] = {
+			"internalGLContextWithOptions:",
+			"internalContextWithEAGLContext:options:",
+			"contextWithEAGLContext:",
+			"contextWithEAGLContext:options:",
+		};
+		for (unsigned i = 0; i < sizeof(sels) / sizeof(sels[0]); i++) {
+			Method m = class_getClassMethod(c, sel_registerName(sels[i]));
+			if (m != NULL) {
+				method_setImplementation(m, (IMP)ret_nil);
+			}
+		}
+	}
+}
+
+static void
+uikit_app_fixes(const char *name)
+{
+	topaz_crash_handlers();
+	ci_context_fixes();
+	Class c3 = objc_getClass("XBApplicationSnapshotManifestImpl");
+	Method m3 = c3 ? class_getClassMethod(c3, sel_registerName("_outputFormatForSnapshot:")) : NULL;
+	if (m3 != NULL) {
+		method_setImplementation(m3, (IMP)sb_snapshot_output_format);
+	}
+	Class c4 = objc_getClass("_UIScreenComplexBoundingPathUtilities");
+	Method m4 = c4 ? class_getClassMethod(c4, sel_registerName("isScreenSupported:")) : NULL;
+	if (m4 != NULL) {
+		method_setImplementation(m4, (IMP)sb_snapshot_output_format);
+	}
+	char msg[128];
+	snprintf(msg, sizeof(msg), "topaz-inject: hooked app %s (bounding + CIContext + crash)\n", name ? name : "?");
+	log_console(msg);
+}
+
 static void
 springboard_fixes(void)
 {
 	pthread_t t;
+	topaz_crash_handlers();
+	ci_context_fixes();
 	pthread_create(&t, NULL, sb_unlock_worker, NULL);
 	io_service_t gpu = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("RedwoodGPU"));
 	if (gpu != 0) {
@@ -436,7 +529,7 @@ springboard_fixes(void)
 	if (m6 != NULL) {
 		method_setImplementation(m6, (IMP)sb_noop);
 	}
-	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding + poster_switcher)\n");
+	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding + poster_switcher + CIContext)\n");
 }
 
 __attribute__((constructor))
@@ -496,7 +589,11 @@ topaz_inject(void)
 		springboard_fixes();
 		return;
 	}
-	if (name == NULL || strcmp(name, "backboardd") != 0 || topaz_gl_path() == NULL) {
+	if (name != NULL && strcmp(name, "backboardd") != 0) {
+		uikit_app_fixes(name);
+		return;
+	}
+	if (name == NULL || topaz_gl_path() == NULL) {
 		return;
 	}
 	if (sysctlbyname("kern.bootargs", args, &size, NULL, 0) == 0 && strstr(args, " gl=0") != NULL) {
