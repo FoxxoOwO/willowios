@@ -26,6 +26,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <mach-o/dyld.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <stdarg.h>
+
+#ifndef DYLD_INTERPOSE
+#define DYLD_INTERPOSE(_replacement, _replacee) \
+	__attribute__((used)) static struct { const void *replacement; const void *replacee; } _interpose_##_replacee \
+	__attribute__((section("__DATA,__interpose"))) = { (const void *)(unsigned long)&_replacement, (const void *)(unsigned long)&_replacee };
+#endif
 
 extern const void *_dyld_get_shared_cache_range(size_t *length);
 
@@ -534,6 +543,60 @@ springboard_fixes(void)
 	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding + poster_switcher)\n");
 }
 
+static int g_is_wifid = 0;
+
+static int
+my_open(const char *path, int oflag, ...)
+{
+	mode_t mode = 0;
+	if (oflag & O_CREAT) {
+		va_list ap;
+		va_start(ap, oflag);
+		mode = (mode_t)va_arg(ap, int);
+		va_end(ap);
+	}
+	if (g_is_wifid && (oflag & O_EXLOCK) && path != NULL && strstr(path, "-lock") != NULL) {
+		int fd = (oflag & O_CREAT) ? open(path, oflag | O_NONBLOCK, mode) : open(path, oflag | O_NONBLOCK);
+		if (fd < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			for (int i = 0; i < 30; i++) {
+				usleep(100000);
+				fd = (oflag & O_CREAT) ? open(path, oflag | O_NONBLOCK, mode) : open(path, oflag | O_NONBLOCK);
+				if (fd >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+					break;
+				}
+			}
+			if (fd < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+				char buf[64] = "?";
+				int rfd = open(path, O_RDONLY);
+				if (rfd >= 0) {
+					ssize_t n = read(rfd, buf, sizeof(buf) - 1);
+					if (n > 0) {
+						buf[n] = '\0';
+						for (ssize_t k = 0; k < n; k++) {
+							if (buf[k] == '\n' || buf[k] == '\r') { buf[k] = '\0'; break; }
+						}
+					}
+					close(rfd);
+				}
+				char msg[256];
+				snprintf(msg, sizeof(msg), "topaz-inject[wifid]: %s held by pid '%s' (self %d), breaking O_EXLOCK\n", path, buf, (int)getpid());
+				log_console(msg);
+				int no_lock = oflag & ~O_EXLOCK;
+				return (no_lock & O_CREAT) ? open(path, no_lock, mode) : open(path, no_lock);
+			}
+		}
+		if (fd >= 0) {
+			if (!(oflag & O_NONBLOCK)) {
+				int fl = fcntl(fd, F_GETFL);
+				if (fl >= 0) { fcntl(fd, F_SETFL, fl & ~O_NONBLOCK); }
+			}
+			return fd;
+		}
+	}
+	return (oflag & O_CREAT) ? open(path, oflag, mode) : open(path, oflag);
+}
+DYLD_INTERPOSE(my_open, open)
+
 __attribute__((constructor))
 static void
 topaz_inject(void)
@@ -589,6 +652,12 @@ topaz_inject(void)
 	}
 	if (name != NULL && strcmp(name, "SpringBoard") == 0) {
 		springboard_fixes();
+		return;
+	}
+	if (name != NULL && strcmp(name, "wifid") == 0) {
+		g_is_wifid = 1;
+		topaz_crash_handlers();
+		log_console("topaz-inject: hooked wifid (O_EXLOCK diag + crash)\n");
 		return;
 	}
 	if (name != NULL && strcmp(name, "backboardd") != 0) {
