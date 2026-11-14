@@ -25,6 +25,7 @@
 #include <mach/mach.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <mach-o/dyld.h>
 
 extern const void *_dyld_get_shared_cache_range(size_t *length);
 
@@ -591,6 +592,11 @@ topaz_inject(void)
 		return;
 	}
 	if (name != NULL && strcmp(name, "backboardd") != 0) {
+		char exe[1024] = "";
+		uint32_t exesz = sizeof(exe);
+		if (_NSGetExecutablePath(exe, &exesz) == 0 && strstr(exe, ".appex/") != NULL) {
+			return;
+		}
 		uikit_app_fixes(name);
 		return;
 	}
