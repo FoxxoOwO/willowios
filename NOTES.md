@@ -2043,4 +2043,8 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
   3. CI sestavení: `gpu.yml` běh `43585814305` (`libtopaz-inject.dylib` 71 904 B) a `xnu.yml` běh `43585814295` (`kernel.development.sweet` 17 496 440 B).
   4. Zabaleno s `--cmdline` délky 531 B (`< 608` B, `gl=force` před `topaz_inject=`, přidáno `Preferences`): `scratch/willow_gui52.adt` (15 194 532 B), `scratch/payload_gui52.bin` (32 675 616 B) a `shim/out/shim-evox-boot-gui52.img` (32 976 896 B / 32 204 KB <= 33 124 352 B).
   5. Nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui52.img` (`Sending 'boot.img' (32204 KB) OKAY`, `Booting OKAY`).
-- **Další krok**: Ověřit po nabootování `gui52`, zda se zobrazí Home Screen a zda se po klepnutí otevře `Preferences` (Nastavení) s Wi-Fi (`en0`). Případně stáhnout log z recovery (`python tools/pull_log.py`).
+     - Výsledek `gui52`: iOS nabootoval na plochu (`SpringBoard`), ale nefungoval dotyk (v `mkadt.py` chyběl `--touch-fw scratch/novatek_fw_packed.bin` a v `--cmdline` chyběly `modem=1 wifi=1 usb=1`).
+- **Oprava v `gui53`**:
+  1. Přidán `--touch-fw scratch/novatek_fw_packed.bin` do `tools/mkadt.py` (`scratch/willow_gui53.adt` 15 276 252 B) a `modem=1 wifi=1 usb=1` do `--cmdline` (552 B `< 608` B).
+  2. Zabalen `shim/out/shim-evox-boot-gui53.img` (33 058 816 B / 32 284 KB) a nabootován přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui53.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
+- **Další krok**: Ověřit po nabootování `gui53`, zda funguje dotyk na ploše, otevření `Preferences` (Nastavení) a Wi-Fi (`en0`).
