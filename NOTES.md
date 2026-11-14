@@ -2047,4 +2047,14 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
 - **Oprava v `gui53`**:
   1. Přidán `--touch-fw scratch/novatek_fw_packed.bin` do `tools/mkadt.py` (`scratch/willow_gui53.adt` 15 276 252 B) a `modem=1 wifi=1 usb=1` do `--cmdline` (552 B `< 608` B).
   2. Zabalen `shim/out/shim-evox-boot-gui53.img` (33 058 816 B / 32 284 KB) a nabootován přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui53.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
-- **Další krok**: Ověřit po nabootování `gui53`, zda funguje dotyk na ploše, otevření `Preferences` (Nastavení) a Wi-Fi (`en0`).
+- **Zjištění z logu `scratch/sweet-log-gui53.txt` (7 564 řádků)**:
+  1. *Dotyk a Home Screen OK, `SweetKeyStore` OK*: Novatek NT36672A SPI touch i GPU Adreno 610 @ 600 MHz běžely bez záseku, `SweetKeyStore` přijal `sel 8` (žádné `0xe00002c7`).
+  2. *Příčina grafických glitchů a zpomalení (`RedwoodGPU: the GPU pool has no 10485760 bytes left`)*: `RedwoodGPU` drželo až 159 MB v `fKept` cache (`GPU_KEPT_BYTES = 160 MB`, `GPU_KEPT_SECONDS = 60 s`) ze 384MB `GPU_POOL` (`0x64000000..0x7C000000`), takže po otevření více aplikací došly 10–12MB bloky pro `SweetSurface` a `IOSurface` padaly nad 4 GiB (`0x10fc10000`), kam Adreno nevidí.
+  3. *Příčina pádů aplikací*: `MobileSMS[288]` spadlo na stejném `CIContext` bugu (`pc 0x0 lr 0x1bdb7458c`), protože nebylo v `topaz_inject=`; `MobileSlideShow[292]` a `Safari[303/305/306]` spadly na `sig 6` (`pc 0x1eb653198`) bez symbolikovaného backtracu; `Preferences[324]` spadlo na `sig 5` v `PodcastsUI+0x8dd10`.
+  4. *Wi-Fi menu v `Preferences` (`0x8BADF00D`)*: `TopazModem` naskenoval 29 sítí (`scan 3 done`), ale `wifid` přestalo volat `apple80211` po `sets 383 -> REFUSED`, `wifip2pd` se opakovaně restartovalo a `Preferences[281]` bylo ukončeno watchdogem (`0x8BADF00D`).
+- **Provedené úpravy v `gui54` (commit `3d38d26`)**:
+  1. `xnu/patches/0965-willow-gpu-kept-cap.patch`: sníženo `GPU_KEPT_BYTES` ze 160 MB na `64 MB` a `GPU_KEPT_SECONDS` na `15 s` v `TopazAdreno.cpp` (`xnu` CI běh `43588591845`).
+  2. `userland/gpu/topaz_inject.c`: přidáno filtrování `.appex/` přes `_NSGetExecutablePath()`, aby bylo možné v `--cmdline` bezpečně použít `*app` pro všechny `.app` aplikace bez injekce do widgetových extenzí (`gpu` CI běh `43588591826`).
+  3. Zabaleno s `--cmdline` 545 B (`*app`, `modem=1 wifi=1 usb=1 gl=force`, `--touch-fw scratch/novatek_fw_packed.bin`) do `shim/out/shim-evox-boot-gui54.img` (`33 058 816` B / `32 284` KB <= `33 124 352` B).
+  4. Zařízení `19126bfc` restartováno z recovery do bootloaderu a nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui54.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
+- **Další krok**: Ověřit v `gui54` grafické glitche, rychlost, stabilitu aplikací (`MobileSMS`, `MobileSlideShow`, `Safari`, `Preferences`) a chování Wi-Fi menu. Případně stáhnout log z recovery a dořešit zamrzání Wi-Fi menu (`wifid` / `sets 383` / `wifip2pd`) a zbývající `sig 6` pády (`MobileSlideShow` / `Safari`).
