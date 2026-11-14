@@ -389,17 +389,10 @@ sb_try_unlock_main(__unused void *ctx)
 	if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), locked_sel)) {
 		locked = ((BOOL (*)(id, SEL))objc_msgSend)(mgr, locked_sel);
 	}
-	BOOL cs_visible = NO;
-	Class cspm = objc_getClass("SBCoverSheetPresentationManager");
-	id pm = cspm ? ((id (*)(id, SEL))objc_msgSend)((id)cspm, sel_registerName("sharedInstance")) : nil;
-	SEL vis_sel = sel_registerName("isVisible");
-	if (pm && ((BOOL (*)(id, SEL, SEL))objc_msgSend)(pm, sel_registerName("respondsToSelector:"), vis_sel)) {
-		cs_visible = ((BOOL (*)(id, SEL))objc_msgSend)(pm, vis_sel);
-	}
-	if (!locked && !cs_visible) {
+	if (!locked) {
 		if (!sb_unlock_logged) {
 			sb_unlock_logged = 1;
-			log_console("topaz-inject: SpringBoard UI is unlocked and CoverSheet dismissed!\n");
+			log_console("topaz-inject: SpringBoard UI is unlocked!\n");
 		}
 		return;
 	}
@@ -412,13 +405,6 @@ sb_try_unlock_main(__unused void *ctx)
 		}
 		log_console(done ? "topaz-inject: main-thread unlockUIFromSource succeeded\n"
 		                 : "topaz-inject: main-thread unlockUIFromSource pending\n");
-	}
-	if (pm && cs_visible) {
-		SEL set_sel = sel_registerName("setCoverSheetPresented:animated:withCompletion:");
-		if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(pm, sel_registerName("respondsToSelector:"), set_sel)) {
-			((void (*)(id, SEL, BOOL, BOOL, id))objc_msgSend)(pm, set_sel, NO, NO, nil);
-			log_console("topaz-inject: dismissed SBCoverSheetPresentationManager\n");
-		}
 	}
 }
 
@@ -506,6 +492,7 @@ springboard_fixes(void)
 {
 	pthread_t t;
 	topaz_crash_handlers();
+	ci_context_fixes();
 	pthread_create(&t, NULL, sb_unlock_worker, NULL);
 	io_service_t gpu = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("RedwoodGPU"));
 	if (gpu != 0) {
