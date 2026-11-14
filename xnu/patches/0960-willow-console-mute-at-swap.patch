@@ -13,24 +13,41 @@
  
  	/* boot-arg sweetfb_console=1: debugging, the panel keeps showing the kernel console */
  	if (console_only < 0) {
-@@ -1426,4 +1432,20 @@
- 	case kSweetFBSwapWait:
- 	default:
-+		if (selector == 12) {
-+			/* sel 12 = display on: mute console here.
-+			 * SwapEnd never arrives because backboardd blocks in mach_msg
-+			 * waiting for a vsync notify that SweetFramebuffer does not
-+			 * deliver before the first swap.  sel 12 always arrives right
-+			 * after backboardd opens the display, before any SwapBegin. */
-+			static bool sweet_muted_at_display_on;
-+			if (!sweet_muted_at_display_on) {
-+				sweet_muted_at_display_on = true;
+@@ -1328,14 +1334,17 @@
+ 		return;
+ 	}
+ 	fConsShown = false;
++	if (!fConsolePaused) {
++		int quiet = 0;
++		fConsolePaused = true;
++		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++			sweet_console_muted = 1;
++		}
++		if (fPixels != 0) {
++			bzero((void *)fPixels, (size_t)fRowBytes * fHeight);
++		}
++	}
+ 	if (directPresent(rec)) {
+-		if (!fConsolePaused) {
+-			int quiet = 0;
+-			fConsolePaused = true;
+-			if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
+-				sweet_console_muted = 1;
+-			}
+-		}
+ 		return;
+ 	}
+ 	IOLockLock(fLock);
+@@ -1621,6 +1630,12 @@
+ 				}
+ 			}
+ 			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
++			if (!off) {
 +				int quiet = 0;
 +				if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
 +					sweet_console_muted = 1;
 +				}
-+				IOLog("SWEET FB: display on, console muted=%d\n", sweet_console_muted);
 +			}
-+		}
+ 		}
  		break;
- 	}
+ 	case kSweetFBSwapWait:
