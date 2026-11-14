@@ -1732,7 +1732,7 @@ index 8aa0c2f..cb43a1e 100644
 +willow_wifi_power_on(void)
 +{
 +	static const struct { uint32_t id, uv; } rails[] = {
-+		{ 8, 640000 },      /* vdd-cx-mx */
++		{ 8, 900000 },      /* vdd-cx-mx (nominal/turbo max_uV so 600 MHz GPU never browns out) */
 +		{ 16, 1800000 },    /* vdd-1.8-xo */
 +		{ 17, 1304000 },    /* vdd-1.3-rfa */
 +		{ 23, 3300000 },    /* vdd-3.3-ch0 */

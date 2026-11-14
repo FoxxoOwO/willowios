@@ -368,14 +368,11 @@ sb_noop(__unused id self, __unused SEL _cmd)
 {
 }
 
-static volatile int sb_is_unlocked = 0;
+static int sb_unlock_logged = 0;
 
 static void
 sb_try_unlock_main(__unused void *ctx)
 {
-	if (sb_is_unlocked) {
-		return;
-	}
 	Class lsm = objc_getClass("SBLockScreenManager");
 	if (!lsm) {
 		return;
@@ -387,15 +384,26 @@ sb_try_unlock_main(__unused void *ctx)
 	if (!mgr) {
 		return;
 	}
+	BOOL locked = NO;
 	SEL locked_sel = sel_registerName("isUILocked");
 	if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), locked_sel)) {
-		BOOL locked = ((BOOL (*)(id, SEL))objc_msgSend)(mgr, locked_sel);
-		if (!locked) {
-			sb_is_unlocked = 1;
-			log_console("topaz-inject: SpringBoard UI is unlocked!\n");
-			return;
-		}
+		locked = ((BOOL (*)(id, SEL))objc_msgSend)(mgr, locked_sel);
 	}
+	BOOL cs_visible = NO;
+	Class cspm = objc_getClass("SBCoverSheetPresentationManager");
+	id pm = cspm ? ((id (*)(id, SEL))objc_msgSend)((id)cspm, sel_registerName("sharedInstance")) : nil;
+	SEL vis_sel = sel_registerName("isVisible");
+	if (pm && ((BOOL (*)(id, SEL, SEL))objc_msgSend)(pm, sel_registerName("respondsToSelector:"), vis_sel)) {
+		cs_visible = ((BOOL (*)(id, SEL))objc_msgSend)(pm, vis_sel);
+	}
+	if (!locked && !cs_visible) {
+		if (!sb_unlock_logged) {
+			sb_unlock_logged = 1;
+			log_console("topaz-inject: SpringBoard UI is unlocked and CoverSheet dismissed!\n");
+		}
+		return;
+	}
+	sb_unlock_logged = 0;
 	SEL sel = sel_registerName("unlockUIFromSource:withOptions:");
 	if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(mgr, sel_registerName("respondsToSelector:"), sel)) {
 		BOOL done = ((BOOL (*)(id, SEL, long, id))objc_msgSend)(mgr, sel, 24, nil);
@@ -403,7 +411,14 @@ sb_try_unlock_main(__unused void *ctx)
 			done = ((BOOL (*)(id, SEL, long, id))objc_msgSend)(mgr, sel, 17, nil);
 		}
 		log_console(done ? "topaz-inject: main-thread unlockUIFromSource succeeded\n"
-		                 : "topaz-inject: main-thread unlockUIFromSource pending (CoverSheet not ready)\n");
+		                 : "topaz-inject: main-thread unlockUIFromSource pending\n");
+	}
+	if (pm && cs_visible) {
+		SEL set_sel = sel_registerName("setCoverSheetPresented:animated:withCompletion:");
+		if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(pm, sel_registerName("respondsToSelector:"), set_sel)) {
+			((void (*)(id, SEL, BOOL, BOOL, id))objc_msgSend)(pm, set_sel, NO, NO, nil);
+			log_console("topaz-inject: dismissed SBCoverSheetPresentationManager\n");
+		}
 	}
 }
 
@@ -413,8 +428,8 @@ sb_unlock_worker(void *arg)
 	(void)arg;
 	/* Wait 10 seconds for SpringBoard to complete UIApplicationMain and present CoverSheet.
 	 * Crucial: Do NOT call [UIApplication sharedApplication] or SBLockScreenManager off the
-	 * main thread! Check the global UIApp pointer, then dispatch unlock checks onto
-	 * dispatch_get_main_queue() until isUILocked becomes NO. */
+	 * main thread! Check the global UIApp pointer, then dispatch unlock/CoverSheet checks onto
+	 * dispatch_get_main_queue() periodically so CoverSheet is dismissed once presented. */
 	sleep(10);
 	id **pUIApp = (id **)dlsym(RTLD_DEFAULT, "UIApp");
 	for (int wait = 0; wait < 30; wait++) {
@@ -425,9 +440,9 @@ sb_unlock_worker(void *arg)
 		sleep(1);
 	}
 	sleep(3);
-	for (int retry = 0; retry < 15 && !sb_is_unlocked; retry++) {
+	for (int retry = 0; retry < 60; retry++) {
 		dispatch_async_f(dispatch_get_main_queue(), NULL, sb_try_unlock_main);
-		sleep(3);
+		sleep(2);
 	}
 	return NULL;
 }
@@ -491,7 +506,6 @@ springboard_fixes(void)
 {
 	pthread_t t;
 	topaz_crash_handlers();
-	ci_context_fixes();
 	pthread_create(&t, NULL, sb_unlock_worker, NULL);
 	io_service_t gpu = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("RedwoodGPU"));
 	if (gpu != 0) {
@@ -529,7 +543,7 @@ springboard_fixes(void)
 	if (m6 != NULL) {
 		method_setImplementation(m6, (IMP)sb_noop);
 	}
-	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding + poster_switcher + CIContext)\n");
+	log_console("topaz-inject: hooked SpringBoard (activation + setup + snapshot + bounding + poster_switcher)\n");
 }
 
 __attribute__((constructor))
