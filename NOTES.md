@@ -2027,3 +2027,20 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
   4. CI sestavení: `gpu.yml` běh `43582130718` (`libtopaz-inject.dylib` 71 872 B) a `xnu.yml` běh `43582133478` (`kernel.development.sweet` 17 496 440 B).
   5. Zabaleno s explicitním seznamem aplikací v `topaz_inject=` (bez `*app`, aby se neinjektovaly widgetové extenze): `xnu/out/willow_fit_gui51.adt` (15 276 220 B), `xnu/out/payload-gui51.bin` (32 757 296 B) a `shim/out/shim-evox-boot-gui51.img` (33 058 816 B / 32 284 KB).
   6. Zařízení `19126bfc` restartováno z recovery do bootloaderu a nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui51.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
+
+### 18. Analýza `gui51` (černá obrazovka s čárkou) a opravy v `gui52` (2026-11-14)
+- **Zjištění z logu `scratch/sweet-log-gui51.txt` (6 174 řádků) vs `sweet-log-gui49.txt`**:
+  1. *GPU a Wi-Fi v `gui51` fungovaly bez záseku*: `Adreno 610` @ 600 MHz (`vdd-cx-mx` = 900 mV) vykreslilo 640+ snímků bez jediného `TopazGPU: no answer` ani `MESA: error`.
+  2. *Příčiny černé obrazovky s čárkou v `gui51`*:
+     - `SBCoverSheetPresentationManager` `setCoverSheetPresented:NO animated:NO withCompletion:nil` v `sb_try_unlock_main()` bylo před prvním snímkem zavoláno 28× za sebou, po čemž `SpringBoard` spadl na 20–23 draws / 52 trojúhelníků (černá obrazovka jen s Home čárkou).
+     - `ci_context_fixes()` bylo v `gui51` odebráno ze `springboard_fixes()` (přitom v `gui49`, kde `SpringBoard` normálně běžel, tam bylo).
+     - `SweetKeyStore.cpp` hunk v `xnu/patches/0962-willow-adreno-fw-aks.patch` měl `+` před `diff --git`, takže ho `patch` ignoroval a `SWEET AKS: SpringBoard sel 8 ... -> 0xe00002c7` stále selhávalo.
+     - `Preferences` se v `gui51` spustilo (`exec Preferences`, `topaz-inject: hooked app Preferences`, bez pádu), ale uživatel 1 s poté stiskl Power (`key 0x30`), takže `SpringBoard` zamkl/uspal obrazovku dřív, než `Preferences` vykreslilo první `IOSurface`.
+     - `boot-args` v `gui51` přesáhlo 607 B a `mkpayload.py` odřízl `gl=force` na konci.
+- **Provedené opravy v `gui52` (commit `5c816eb`)**:
+  1. `xnu/patches/0962-willow-adreno-fw-aks.patch` + nový `xnu/patches/0964-willow-aks-lock-device.patch`: odstraněn poškozený konec z `0962` a čistě přidán `kAKSLockDevice = 8` do `SweetKeyStore.cpp` (ověřeno v CI logu `43585814295`).
+  2. `userland/gpu/topaz_inject.c`: obnoveno chování z `gui49` (`ci_context_fixes()` zpět i ve `springboard_fixes()`, `sb_try_unlock_main()` odemyká pouze přes `unlockUIFromSource:withOptions:` bez opakovaného volání `SBCoverSheetPresentationManager`).
+  3. CI sestavení: `gpu.yml` běh `43585814305` (`libtopaz-inject.dylib` 71 904 B) a `xnu.yml` běh `43585814295` (`kernel.development.sweet` 17 496 440 B).
+  4. Zabaleno s `--cmdline` délky 531 B (`< 608` B, `gl=force` před `topaz_inject=`, přidáno `Preferences`): `scratch/willow_gui52.adt` (15 194 532 B), `scratch/payload_gui52.bin` (32 675 616 B) a `shim/out/shim-evox-boot-gui52.img` (32 976 896 B / 32 204 KB <= 33 124 352 B).
+  5. Nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui52.img` (`Sending 'boot.img' (32204 KB) OKAY`, `Booting OKAY`).
+- **Další krok**: Ověřit po nabootování `gui52`, zda se zobrazí Home Screen a zda se po klepnutí otevře `Preferences` (Nastavení) s Wi-Fi (`en0`). Případně stáhnout log z recovery (`python tools/pull_log.py`).
