@@ -3985,16 +3985,3 @@ index ed9a333..7711610 100644
 -extern const size_t topaz_fw_sqe_fw_size = 32504;
 +extern const size_t topaz_fw_sqe_fw_size = 31980;
  }
-diff --git a/iokit/Kernel/arm/SweetKeyStore.cpp b/iokit/Kernel/arm/SweetKeyStore.cpp
-index 73d9267..88d9267 100644
---- a/iokit/Kernel/arm/SweetKeyStore.cpp
-+++ b/iokit/Kernel/arm/SweetKeyStore.cpp
-@@ -211,6 +211,8 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
- 	case kAKSAssertDrop:
- 	case kAKSUnloadSessionBags:
- 	case kAKSNotifyStateSet:
-+	case 8: /* kAKSLockDevice */
-+	case 35:
- 		args->scalarOutputCount = 0;
- 		break;
- 	case kAKSGetSystem:

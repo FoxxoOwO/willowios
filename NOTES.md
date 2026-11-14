@@ -1986,9 +1986,13 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
      - `sb_unlock_worker` nyní posílá odemykací pokusy výhradně na hlavní vlákno (`dispatch_async_f(dispatch_get_main_queue(), NULL, sb_try_unlock_main)`), kontroluje `[mgr isUILocked]` a opakuje `unlockUIFromSource:24` (a `17`) každé 3 s, dokud se Lock Screen skutečně neodemkne.
      - Přidán hook `-[SBMainDisplayPolicyAggregator _allowsCapabilityPosterSwitcherWithExplanation:] -> NO`, který zakazuje černý Poster Switcher při dlouhém stisku na Lock Screenu, a neutralizován `AegirPoster`.
   3. *Sestavení a nabootování `gui49`*:
-     - GitHub Actions CI běh `xnu.yml` `43571740073` úspěšně zkompiloval jádro za 5 min 58 s (`xnu/out/kernel.development.sweet.gui49`, 17 550 688 B).
-     - Zabalen `scratch/blobs_fit.bin` (15 131 312 B), `xnu/out/willow_fit.adt` (15 223 612 B), `xnu/out/payload-gui49.bin` (32 758 928 B) a `shim/out/shim-evox-boot-gui49.img` (33 058 816 B / 32 284 KB, pod limitem 32 348 KB).
-     - Zařízení `19126bfc` restartováno z recovery do fastbootu a nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui49.img`.
+     - První zabalení `payload-gui49.bin` bylo spuštěno bez parametru `--cmdline`, čímž `mkpayload.py` použil výchozí `debug=0xc serial=3 cpus=1 keepsyms=1` (bez `rd=ufsroot0`) a XNU zůstalo stát na konzoli (`waiting for root device`). Navíc v CI běhu `43571740073` byl patch `0962` přeskočen kvůli posunu čísla řádku v `SweetKeyStore.cpp`.
+     - Oprava: Do `xnu/out/kernel.development.sweet.gui49` přímo vložen podepsaný Willow `a610_zap.mdt` (`0x2a0c0`) a `a630_sqe.fw` (`0x2c3d0`, velikost `31 980` na `0x342c8`), v `0962-willow-adreno-fw-aks.patch` ponechán čistý hunk pro `TopazAdrenoFw.cpp` a `payload-gui49.bin` přegenerován s plným `--cmdline` (519 znaků včetně `rd=ufsroot0`, `gpu=1`, `sweetfb_noconsole=1`, `topaz_inject=...` a `gl=force`).
+     - Opravený obraz `shim/out/shim-evox-boot-gui49.img` (33 058 816 B / 32 284 KB) znovu nabootován přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui49.img`.
+- **MILNÍK POTVRZEN UŽIVATELEM (2026-11-14, `gui49`)**:
+  - **iOS 16.7.16 plně nabootoval do odemčeného systému (SpringBoard Home Screen) bez překryvu konzole, s hardwarovou akcelerací Adreno 610 a plně funkčním dotykovým ovládáním Novatek NT36672A SPI!**
+
+
 
 
 
