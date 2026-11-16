@@ -1,7 +1,25 @@
 diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index e943844..b1807cc 100644
 --- a/iokit/Kernel/arm/TopazModem.cpp
 +++ b/iokit/Kernel/arm/TopazModem.cpp
-@@ -4050,6 +4050,8 @@ wmi_send(uint32_t cmd, const uint8_t *tlvs, uint32_t len)
+@@ -2816,6 +2816,7 @@ htc_rx(uint32_t c, const uint8_t *d, uint32_t len)
+ #define TAG_SCAN_CHAN_LIST_CMD 0x4F
+ #define TAG_CHANNEL         0x50
+ #define TAG_VDEV_CREATE_CMD 0x56
++#define TAG_VDEV_TXRX_STREAMS 0x19B
+ #define TAG_SERVICE_AVAILABLE 0x22F
+ #define ABI_VER0            0x01000000u
+ #define ABI_VER1            53
+@@ -2840,7 +2841,7 @@ static bool
+ wmi_svc(uint32_t bit)
+ {
+ 	if (bit < 128) {
+-		return (wmi_svc_map[bit / 4] & (1u << (bit % 4))) != 0;
++		return (wmi_svc_map[bit / 32] & (1u << (bit % 32))) != 0;
+ 	}
+ 	bit -= 128;
+ 	return bit < 128 && (wmi_svc_ext[bit / 32] & (1u << (bit % 32))) != 0;
+@@ -2874,6 +2875,8 @@ wmi_send(uint32_t cmd, const void *tlvs, uint32_t len)
  	return htc_wmi_send(m, len + 4);
  }
  
@@ -10,7 +28,7 @@ diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
  /* walk the TLVs of SERVICE_READY (ath10k_wmi_tlv_svc_rdy_parse) */
  static void
  wmi_svc_ready(const uint8_t *p, uint32_t len)
-@@ -4064,6 +4066,7 @@ wmi_svc_ready(const uint8_t *p, uint32_t len)
+@@ -2891,6 +2894,7 @@ wmi_svc_ready(const uint8_t *p, uint32_t len)
  			memcpy(&fw, v, 4);
  			memcpy(&a0, v + 4, 4);
  			memcpy(&rf, v + 4 + 24 + 8, 4);
@@ -18,7 +36,18 @@ diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
  			LOG("wmi: fw %08x abi %08x rf_chains %u", fw, a0, rf);
  		} else if (tag == TAG_ARRAY_UINT32 && !wmi_seen_bmap) {
  			wmi_seen_bmap = true;
-@@ -4135,8 +4138,9 @@ wmi_send_init(void)
+@@ -2952,8 +2956,8 @@ wmi_send_init(void)
+ 	p = put32(p, 0);
+ 	p = put32(p, 0);
+ 	p = put32(p, n);
+-	/* wmi_tlv_resource_config, 44 x u32, ath10k values for wcn3990 */
+-	uint32_t rc[44] = {};
++	/* wmi_tlv_resource_config, 83 x u32 (332 B, qcacld-3.0 WLAN.HL.3.0.2) */
++	uint32_t rc[83] = {};
+ 	rc[0] = NUM_VDEVS;
+ 	rc[1] = NUM_PEERS;
+ 	if (wmi_svc(SVC_RX_FULL_REORDER)) {
+@@ -2963,8 +2967,9 @@ wmi_send_init(void)
  	rc[4] = 2;                                  /* peer keys */
  	rc[5] = NUM_PEERS * 2;                      /* tids */
  	rc[6] = 16;                                 /* ast skid limit */
@@ -30,7 +59,15 @@ diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
  	rc[9] = 0x64; rc[10] = 0x64; rc[11] = 0x64; rc[12] = 0x28;
  	rc[13] = 1;                                 /* rx decap: native wifi */
  	rc[14] = 4;                                 /* scan max pending */
-@@ -4217,7 +4221,7 @@ scan_start(void)
+@@ -2985,6 +2990,7 @@ wmi_send_init(void)
+ 	rc[37] = 1;
+ 	rc[38] = 1;
+ 	rc[43] = 1u << 9;                           /* MGMT_BUNDLE_TX_COMPL */
++	rc[68] = 0x20;                             /* qcacld-3.0 send_init_cmd_tlv */
+ 	p = wmi_put_tlv(p, TAG_RESOURCE_CONFIG, sizeof(rc));
+ 	memcpy(p, rc, sizeof(rc));
+ 	p += sizeof(rc);
+@@ -3075,7 +3081,7 @@ scan_start(void)
  	p = wmi_put_tlv(p, TAG_ARRAY_STRUCT, NFREQ * (4 + 24));
  	for (uint32_t i = 0; i < NFREQ; i++) {
  		uint32_t mode = scan_freqs[i] < 4000 ? 1 : 0;
@@ -39,45 +76,197 @@ diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
  		c = wmi_put_tlv(p, TAG_CHANNEL, 24);
  		c = put32(c, scan_freqs[i]);
  		c = put32(c, scan_freqs[i]);
-@@ -4979,10 +4983,11 @@ static uint8_t *
- w_channel(uint8_t *p, uint32_t freq)
- {
- 	uint8_t *c = wmi_put_tlv(p, TAG_CHANNEL, 24);
-+	uint32_t mode = freq < 4000 ? 1 : 0;
- 	c = w_p32(c, freq);
- 	c = w_p32(c, freq);
- 	c = w_p32(c, 0);
--	c = w_p32(c, freq < 4000 ? 1 : 0);
-+	c = w_p32(c, mode | (1u << 11) | (freq < 4000 ? 0 : (1u << 12)));
- 	c = w_p32(c, (40u << 8) | (40u << 16));
- 	return w_p32(c, 40u << 8);
- }
-@@ -5083,14 +5088,16 @@ htt_tx_compl(const uint8_t *m, uint32_t len)
+@@ -3085,12 +3091,22 @@ scan_start(void)
+ 		p = put32(c, 40u << 8);
+ 	}
+ 	bool a = wmi_send(CMD_SCAN_CHAN_LIST, m, (uint32_t)(p - m));
+-	uint8_t v[4 + 20] = {};
+-	c = wmi_put_tlv(v, TAG_VDEV_CREATE_CMD, 20);
++	uint8_t v[4 + 44 + 4 + 32] = {};
++	c = wmi_put_tlv(v, TAG_VDEV_CREATE_CMD, 44);
+ 	c = put32(c, 0);                            /* vdev 0 */
+ 	c = put32(c, 2);                            /* station */
+ 	c = put32(c, 0);
+ 	memcpy(c, our_mac, 6);
++	c += 8;
++	put32(c, 2);                                /* num_cfg_streams (2.4G + 5G) */
++	uint8_t *st = wmi_put_tlv(v + 4 + 44, TAG_ARRAY_STRUCT, 32);
++	for (uint32_t band = 0; band < 2; band++) {
++		c = wmi_put_tlv(st, TAG_VDEV_TXRX_STREAMS, 12);
++		c = put32(c, band);
++		c = put32(c, 1);
++		put32(c, 1);
++		st += 16;
++	}
+ 	bool b = wmi_send(CMD_VDEV_CREATE, v, sizeof(v));
+ 	scanning = scan_send_start();
+ 	LOG("t=%u ms: scan: chan list (%u ch) %s, vdev %s, passive scan %s", g_ms, NFREQ, a ? "ok" : "FAILED",
+@@ -3928,15 +3944,20 @@ htt_tx_compl(const uint8_t *p, uint32_t len)
  static bool
  w_vdev_start(uint32_t freq, uint32_t bcn, uint32_t dtim)
  {
 -	uint8_t m[4 + 72 + 4 + 24 + 4] = {}, *p;
 -	p = wmi_put_tlv(m, TAG_VDEV_START, 72);
-+	uint8_t m[4 + 80 + 4 + 24 + 4] = {}, *p;
-+	p = wmi_put_tlv(m, TAG_VDEV_START, 80);
- 	p = w_p32(p, 0);
- 	p = w_p32(p, 0);
- 	p = w_p32(p, bcn);
- 	p = w_p32(p, dtim);
- 	p = w_p32(p, 0);
- 	p += 36 + 16;                               /* ssid (empty for a station), tx rate/power, noa, hw ack */
-+	p = w_p32(p, 1);                            /* preferred_tx_streams */
+-	p = w_p32(p, 0);
+-	p = w_p32(p, 0);
+-	p = w_p32(p, bcn);
+-	p = w_p32(p, dtim);
+-	p = w_p32(p, 0);
+-	p += 36 + 16;                               /* ssid (empty for a station), tx rate/power, noa, hw ack */
+-	p = w_channel(p, freq);
++	uint8_t m[4 + 120 + 4 + 24 + 4] = {}, *p;
++	p = wmi_put_tlv(m, TAG_VDEV_START, 120);
++	p = w_p32(p, 0);                            /* vdev_id */
++	p = w_p32(p, 0);                            /* requestor_id */
++	p = w_p32(p, bcn);                          /* beacon_interval */
++	p = w_p32(p, dtim);                         /* dtim_period */
++	p = w_p32(p, 8);                            /* flags: LDPC_RX_ENABLED (qcacld-3.0) */
++	uint32_t slen = MIN((uint32_t)s_ssid_len, 32u);
++	p = w_p32(p, slen);
++	memcpy(p, s_ssid, slen);
++	p = m + 4 + 72;                             /* offset 0x4c: preferred_rx/tx_streams */
 +	p = w_p32(p, 1);                            /* preferred_rx_streams */
- 	p = w_channel(p, freq);
++	p = w_p32(p, 1);                            /* preferred_tx_streams */
++	p = w_channel(m + 4 + 120, freq);
  	wmi_put_tlv(p, TAG_ARRAY_STRUCT, 0);
  	return wmi_send(CMD_VDEV_START, m, sizeof(m));
-@@ -5606,6 +5613,9 @@ w_join_event(uint32_t id, const uint8_t *t, uint32_t len)
+ }
+@@ -3984,8 +4005,9 @@ w_ps_off(void)
+ static bool
+ w_mgmt_tx(const uint8_t *f, uint32_t len)
+ {
+-	uint8_t m[4 + 28 + 4 + 64] = {}, *p;
+-	uint32_t buf = (MIN(len, 64u) + 3) & ~3u;
++	uint8_t m[4 + 40 + 4 + 64] = {}, *p;
++	uint32_t raw = MIN(len, 64u);
++	uint32_t buf = (raw + 3) & ~3u;
+ 	if (s_mgmt_va == NULL) {
+ 		s_mgmt_va = (uint8_t *)pool_alloc(0x1000, &s_mgmt_pa);
+ 	}
+@@ -3995,16 +4017,16 @@ w_mgmt_tx(const uint8_t *f, uint32_t len)
+ 	bzero(s_mgmt_va, ((len + 3) & ~3u) + 4);
+ 	memcpy(s_mgmt_va, f, len);
+ 	mb();
+-	p = wmi_put_tlv(m, TAG_MGMT_TX, 28);
++	p = wmi_put_tlv(m, TAG_MGMT_TX, 40);
+ 	p = w_p32(p, 0);
+ 	p = w_p32(p, ++s_desc);
+-	p = w_p32(p, 0);
++	p = w_p32(p, s_freq);
+ 	p = put64(p, s_mgmt_pa);
+ 	p = w_p32(p, len);
+-	p = w_p32(p, buf);
+-	p = wmi_put_tlv(p, TAG_ARRAY_BYTE, buf);
+-	memcpy(p, s_mgmt_va, buf);
+-	return wmi_send(CMD_MGMT_TX_SEND, m, 4 + 28 + 4 + buf);
++	(void)w_p32(p, raw);
++	p = wmi_put_tlv(m + 4 + 40, TAG_ARRAY_BYTE, buf);
++	memcpy(p, s_mgmt_va, raw);
++	return wmi_send(CMD_MGMT_TX_SEND, m, 4 + 40 + 4 + buf);
+ }
+ 
+ static uint32_t
+@@ -4024,9 +4046,9 @@ w_ap_rates(uint8_t *out)
+ static bool
+ w_peer_assoc(uint32_t caps)
+ {
+-	uint8_t m[4 + 76 + 4 + 16 + 4 + 4 + 16] = {}, *p, *r, rates[16];
++	uint8_t m[4 + 244 + 4 + 16 + 4 + 4 + 20 + 4] = {}, *p, *r, rates[16];
+ 	uint32_t n = w_ap_rates(rates), rl = (MIN(n, 16u) + 3) & ~3u;
+-	p = wmi_put_tlv(m, TAG_PEER_ASSOC, 76);
++	p = wmi_put_tlv(m, TAG_PEER_ASSOC, 244);
+ 	p = w_pmac(p, s_bssid);
+ 	p = w_p32(p, 0);
+ 	p = w_p32(p, 1);                            /* new assoc */
+@@ -4041,24 +4063,26 @@ w_peer_assoc(uint32_t caps)
+ 	p = w_p32(p, s_freq < 4000 ? 1 : 0);        /* phy mode: 11g / 11a */
+ 	p += 8;
+ 	p = w_p32(p, MIN(n, 16u));
+-	p = w_p32(p, 0);
+-	r = wmi_put_tlv(p, TAG_ARRAY_BYTE, rl);
++	(void)w_p32(p, 0);
++	w_p32(m + 0x9c, 1);                         /* peer_nss (qcacld-3.0) */
++	r = wmi_put_tlv(m + 4 + 244, TAG_ARRAY_BYTE, rl);
+ 	for (uint32_t i = 0; i < n && i < 16; i++) {
+ 		uint8_t v = rates[i] & 0x7F;
+ 		r[i] = (v == 2 || v == 4 || v == 11 || v == 22) ? (uint8_t)(v | 0x80) : v;
+ 	}
+ 	p = r + rl;
+ 	p = wmi_put_tlv(p, TAG_ARRAY_BYTE, 0);
+-	wmi_put_tlv(p, TAG_VHT_RATE_SET, 16);
+-	return wmi_send(CMD_PEER_ASSOC, m, 4 + 76 + 4 + rl + 4 + 4 + 16);
++	p = wmi_put_tlv(p, TAG_VHT_RATE_SET, 20);
++	wmi_put_tlv(p + 20, TAG_ARRAY_STRUCT, 0);
++	return wmi_send(CMD_PEER_ASSOC, m, 4 + 244 + 4 + rl + 4 + 4 + 20 + 4);
+ }
+ 
+ static bool
+ w_install_key(bool group, uint32_t idx, uint32_t cipher, const uint8_t *key, uint32_t klen)
+ {
+-	uint8_t m[4 + 92 + 4 + 32] = {}, *p;
++	uint8_t m[4 + 100 + 4 + 32] = {}, *p;
+ 	uint32_t kl = (klen + 3) & ~3u;
+-	p = wmi_put_tlv(m, TAG_VDEV_INSTALL_KEY, 92);
++	p = wmi_put_tlv(m, TAG_VDEV_INSTALL_KEY, 100);
+ 	p = w_p32(p, 0);
+ 	p = w_pmac(p, s_bssid);
+ 	p = w_p32(p, idx);
+@@ -4068,9 +4092,10 @@ w_install_key(bool group, uint32_t idx, uint32_t cipher, const uint8_t *key, uin
+ 	p = w_p32(p, klen);
+ 	p = w_p32(p, cipher == WMI_CIPHER_TKIP ? 8 : 0);
+ 	p = w_p32(p, cipher == WMI_CIPHER_TKIP ? 8 : 0);
++	p += 8;                                     /* qcacld-3.0 100B TLV tail */
+ 	p = wmi_put_tlv(p, TAG_ARRAY_BYTE, kl);
+ 	memcpy(p, key, klen);
+-	return wmi_send(CMD_VDEV_INSTALL_KEY, m, 4 + 92 + 4 + kl);
++	return wmi_send(CMD_VDEV_INSTALL_KEY, m, 4 + 100 + 4 + kl);
+ }
+ 
+ /* ---- 802.11 management frames */
+@@ -4403,7 +4428,8 @@ w_assoc_mgmt_rx(const uint8_t *f, uint32_t len)
+ 		s_state = S_ASSOC;
+ 		s_tries = 1;
+ 		w_build_assoc_req();
+-		w_mgmt_tx(s_assoc_req, s_assoc_req_len);
++		bool atx = w_mgmt_tx(s_assoc_req, s_assoc_req_len);
++		LOG("t=%u ms: join: ASSOC tx %s (%u B)", g_ms, atx ? "ok" : "FAIL", s_assoc_req_len);
+ 		s_deadline = g_ms + 400;
+ 	} else if (fc == FC_ASSOC_RESP && s_state == S_ASSOC && len >= 30) {
+ 		v = (uint16_t)(f[26] | f[27] << 8);
+@@ -4413,12 +4439,13 @@ w_assoc_mgmt_rx(const uint8_t *f, uint32_t len)
+ 			w_join_end(ECONNREFUSED);
+ 			return;
+ 		}
+-		w_peer_assoc((uint32_t)(f[24] | f[25] << 8));
+-		uint8_t m[20], *p = wmi_put_tlv(m, TAG_VDEV_UP, 16);
++		bool pa = w_peer_assoc((uint32_t)(f[24] | f[25] << 8));
++		uint8_t m[4 + 36] = {}, *p = wmi_put_tlv(m, TAG_VDEV_UP, 36);
+ 		p = w_p32(p, 0);
+ 		p = w_p32(p, s_aid);
+ 		w_pmac(p, s_bssid);
+-		wmi_send(CMD_VDEV_UP, m, sizeof(m));
++		bool vu = wmi_send(CMD_VDEV_UP, m, sizeof(m));
++		LOG("t=%u ms: join: PEER_ASSOC %s, VDEV_UP %s", g_ms, pa ? "ok" : "FAIL", vu ? "ok" : "FAIL");
+ 		if (!s_rsn) {
+ 			w_peer_param(PEER_PARAM_AUTHORIZE, 1);
+ 			s_state = S_4WAY;                   /* (teardown order) */
+@@ -4453,6 +4480,7 @@ w_join_event(uint32_t id, const uint8_t *t, uint32_t len)
  	if (id == 0x5001 && l >= 16) {             /* VDEV_START_RESP {vdev, req, type, status} */
  		s_start_status = (int32_t)v[3];
  		s_start_resp = true;
-+		if (s_start_status != 0) {
-+			LOG("t=%u ms: join: VDEV_START_RESP vdev=%u req=%u type=%u status=%d", g_ms, v[0], v[1], v[2], s_start_status);
-+		}
++		LOG("t=%u ms: join: VDEV_START_RESP vdev=%u req=%u type=%u status=%d", g_ms, v[0], v[1], v[2], s_start_status);
  	} else if (id == 0x6001 && s_state == S_UP) {   /* PEER_STA_KICKOUT */
  		LOG("t=%u ms: join: peer kickout", g_ms);
  		w_teardown();
+@@ -4481,8 +4509,9 @@ w_join_poll(void)
+ 			}
+ 			s_state = S_AUTH;
+ 			s_tries = 1;
+-			w_peer(CMD_PEER_CREATE, TAG_PEER_CREATE, true);
+-			w_send_auth();
++			bool pc = w_peer(CMD_PEER_CREATE, TAG_PEER_CREATE, true);
++			bool au = w_send_auth();
++			LOG("t=%u ms: join: PEER_CREATE %s, AUTH tx %s", g_ms, pc ? "ok" : "FAIL", au ? "ok" : "FAIL");
+ 			s_deadline = g_ms + 400;
+ 		} else if (g_ms > s_deadline) {
+ 			w_join_end(ETIMEDOUT);
