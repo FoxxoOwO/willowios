@@ -2058,3 +2058,24 @@ t36xxx/novatek v nich: relevantní jsou UniXNU/ShengNovatekTouch + UniXNU/QcomGe
   3. Zabaleno s `--cmdline` 545 B (`*app`, `modem=1 wifi=1 usb=1 gl=force`, `--touch-fw scratch/novatek_fw_packed.bin`) do `shim/out/shim-evox-boot-gui54.img` (`33 058 816` B / `32 284` KB <= `33 124 352` B).
   4. Zařízení `19126bfc` restartováno z recovery do bootloaderu a nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui54.img` (`Sending 'boot.img' (32284 KB) OKAY`, `Booting OKAY`).
 - **Další krok**: Ověřit v `gui54` grafické glitche, rychlost, stabilitu aplikací (`MobileSMS`, `MobileSlideShow`, `Safari`, `Preferences`) a chování Wi-Fi menu. Případně stáhnout log z recovery a dořešit zamrzání Wi-Fi menu (`wifid` / `sets 383` / `wifip2pd`) a zbývající `sig 6` pády (`MobileSlideShow` / `Safari`).
+
+## Stav k 2026-11-16 (`gui56` → `gui58`: oprava `wifid` deadlocku a `qcacld-3.0` WMI-TLV)
+- **`gui56` (commit `ac55bd7`, `gpu` CI run `43595885583`)**:
+  - Příčina zamrzání Settings → Wi-Fi v `gui54`/`gui55diag`: `wifid` `t0` visel uvnitř `SCPreferencesLock` (`SystemConfiguration`) na `O_EXLOCK` souboru `/Library/Preferences/SystemConfiguration/preferences.plist-lock` drženém jiným procesem (PID `72`).
+  - V `userland/gpu/topaz_inject.c` přidán `DYLD_INTERPOSE(my_open, open)` pro `wifid`, který při `O_EXLOCK` polluje `O_NONBLOCK` po dobu 3 s a poté lock prolomí (`libtopaz-inject.dylib` 88 848 B v `scratch/willow_gui56.adt`, 15 293 196 B).
+  - **Pozorovaný výsledek (`scratch/sweet-log-gui56.txt`)**: řádek `1794` zalogoval `breaking O_EXLOCK`, menu **Nastavení → Wi-Fi se otevřelo bez zamrznutí**, zobrazilo naskenované sítě a `wifid` odeslalo `sets 20 (ASSOCIATE)`.
+- **`gui57` (commit `7b2d6fc`, `xnu` CI run `43612794799`, `shim/out/shim-evox-boot-gui57.img` 33 075 200 B)**:
+  - **Pozorovaný výsledek (`scratch/sweet-log-gui57.txt`)**:
+    - `wmi: fw 30218290 abi 01000000 rf_chains 1`
+    - Při zadání hesla k `Foltovi-5G` (5200 MHz WPA2) `TopazModem` odpověděl za 2 ms: `join: VDEV_START_RESP vdev=0 req=0 type=0 status=-1` → `join: failed (5) in state 1`.
+  - **Zjištěná příčina (ověřeno disassemblováním `scratch/evox_kernel.bin` s `qcacld-3.0` `WLAN.HL.3.0.2-00656-QCAHLSWMTPLZ-1.406501.4`)**:
+    - Původní `TopazModem` (`0123`/`0129`) posílal `ath10k` WMI-TLV délky/layouty, které se liší od `qcacld-3.0`:
+      - `TAG_RESOURCE_CONFIG` (`0x4B`): `176` B (`44` u32) místo **`332` B** (`83` u32) + `rc[68] = 0x20`.
+      - `CMD_VDEV_CREATE` (`0x5001`): `20` B `TAG_VDEV_CREATE_CMD` místo **`44` B** (`num_cfg_streams=2`) + **`32` B `TAG_ARRAY_STRUCT`** se 2× `TAG_VDEV_TXRX_STREAMS` (`0x19B`, band 0/1, tx=1, rx=1).
+      - `CMD_VDEV_START` (`0x5003`): `72`/`80` B místo **`120` B `TAG_VDEV_START`** (`flags=8` `LDPC_RX_ENABLED`, `ssid`, `preferred_rx/tx_streams=1` na `+0x4c`/`+0x50`) + `24` B `TAG_CHANNEL` (pouze `mode`, bez bitů `11`/`12`) + `4` B `TAG_ARRAY_STRUCT` = celkem **`156` B**.
+      - Navazující příkazy pro dokončení spojení rovněž zvětšeny na layout `qcacld-3.0`: `CMD_MGMT_TX_SEND` (`0x7008`: `40` B), `CMD_PEER_ASSOC` (`0x6005`: `244` B + `20` B `TAG_VHT_RATE_SET` + `TAG_ARRAY_STRUCT`), `CMD_VDEV_UP` (`0x5005`: `36` B), `CMD_VDEV_INSTALL_KEY` (`0x5009`: `100` B); dále opravena chyba bitové masky ve `wmi_svc()` (`bit / 32`, `bit % 32` místo `/ 4`, `% 4`).
+- **`gui58` (commit `10bfa81`, `xnu` CI run `43863451854` v `8m46s`, `scratch/ci-gui58/kernel.development.sweet` 17 496 480 B)**:
+  - Aktualizován `xnu/patches/0966-willow-wlan-vdev-start-diag.patch` se všemi uvedenými `qcacld-3.0` WMI-TLV opravami a diagnostickým logováním (`VDEV_START_RESP`, `PEER_CREATE`, `AUTH tx`, `ASSOC tx`, `PEER_ASSOC`, `VDEV_UP`).
+  - Zabalen `xnu/out/payload-gui58.bin` (32 774 304 B, `scratch/willow_gui56.adt`, přesný 551B cmdline z `gui57`) a `shim/out/shim-evox-boot-gui58.img` (33 075 200 B <= 33 124 352 B).
+  - Nabootováno přes `fastboot -s 19126bfc boot shim/out/shim-evox-boot-gui58.img` (`Sending 'boot.img' (32300 KB) OKAY`, `Booting OKAY`, `1.061s`).
+- **Další krok**: Otestovat připojení k Wi-Fi v Nastavení, při potížích nebo po testu přejít do recovery a přečíst log (`VDEV_START_RESP`, `AUTH`, `ASSOC`, `PEER_ASSOC`, `VDEV_UP`, `WPA2 keys installed`, `*** joined ... ***`).
